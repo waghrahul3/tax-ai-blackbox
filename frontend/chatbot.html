@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaxAI Chat Console</title>
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --panel: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --brand: #0ea5e9;
+      --brand-dark: #0284c7;
+      --line: #dbe5ef;
+      --success: #16a34a;
+      --danger: #dc2626;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 20% 10%, #e0f2fe, var(--bg));
+      color: var(--ink);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .app {
+      width: min(1080px, 100%);
+      height: min(88vh, 920px);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(2, 8, 23, 0.12);
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 18px;
+      background: linear-gradient(180deg, #f8fbff, #ffffff);
+      overflow-y: auto;
+    }
+
+    .title {
+      margin: 0 0 6px;
+      font-size: 1.15rem;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      font-size: 0.85rem;
+      color: #334155;
+      font-weight: 600;
+    }
+
+    select, textarea, input[type="file"], button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+      background: #fff;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 96px;
+    }
+
+    .meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    button {
+      border: none;
+      background: var(--brand);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.2s ease;
+      margin-top: 14px;
+    }
+
+    button:hover { background: var(--brand-dark); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .chat {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+
+    .chat-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #fff;
+    }
+
+    .status { font-size: 0.85rem; color: var(--muted); }
+    .status.ok { color: var(--success); }
+    .status.err { color: var(--danger); }
+
+    .messages {
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #fbfdff;
+    }
+
+    .bubble {
+      max-width: 85%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .bubble.user {
+      align-self: flex-end;
+      background: #e0f2fe;
+      border-color: #bae6fd;
+    }
+
+    .bubble.system {
+      align-self: flex-start;
+    }
+
+    .result-links {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .result-links a {
+      display: inline-block;
+      text-decoration: none;
+      color: #0c4a6e;
+      background: #e0f2fe;
+      border: 1px solid #bae6fd;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.82rem;
+    }
+
+    .result-links button {
+      border: 1px solid #bae6fd;
+      background: #ecfeff;
+      color: #0e7490;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin: 0;
+      width: auto;
+    }
+
+    .viewer {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 999;
+    }
+
+    .viewer.open { display: flex; }
+
+    .viewer-modal {
+      width: min(1000px, 100%);
+      height: min(84vh, 920px);
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      box-shadow: 0 24px 60px rgba(2, 8, 23, 0.25);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .viewer-head {
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: #f8fbff;
+      gap: 10px;
+    }
+
+    .viewer-title {
+      margin: 0;
+      font-size: 0.96rem;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .viewer-close {
+      width: auto;
+      margin: 0;
+      padding: 7px 12px;
+      font-size: 0.82rem;
+      background: #0f172a;
+      color: #fff;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+    }
+
+    .viewer-body {
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      line-height: 1.5;
+      font-size: 0.9rem;
+      background: #fbfdff;
+    }
+
+    .viewer-body h1,
+    .viewer-body h2,
+    .viewer-body h3,
+    .viewer-body h4 {
+      margin: 0.7em 0 0.45em;
+      line-height: 1.25;
+    }
+
+    .viewer-body p { margin: 0.5em 0; }
+
+    .viewer-body code {
+      background: #e2e8f0;
+      padding: 1px 5px;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.85em;
+    }
+
+    .viewer-body pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      overflow: auto;
+      margin: 10px 0;
+      border: 1px solid #1e293b;
+      font-size: 0.84rem;
+    }
+
+    .viewer-body ul, .viewer-body ol {
+      margin: 0.45em 0 0.7em 1.2em;
+    }
+
+    .viewer-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      background: #fff;
+    }
+
+    .viewer-body th, .viewer-body td {
+      border: 1px solid #dbe5ef;
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .viewer-body thead {
+      background: #f1f5f9;
+    }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; height: auto; }
+      .sidebar { border-right: none; border-bottom: 1px solid var(--line); }
+      .chat { min-height: 56vh; }
+      .bubble { max-width: 96%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <h1 class="title">TaxAI Assistant</h1>
+      <p class="subtitle">Upload slips, choose a template, and get report outputs.</p>
+
+      <label for="template">Template</label>
+      <select id="template"></select>
+
+      <label for="files">Upload Files</label>
+      <input id="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.csv" />
+      <div class="meta" id="fileMeta">No files selected.</div>
+
+      <label for="prompt">Instruction (optional)</label>
+      <textarea id="prompt" placeholder="Example: Prioritize T4E Box 36 parental checks."></textarea>
+
+      <button id="sendBtn">Process Documents</button>
+    </aside>
+
+    <section class="chat">
+      <header class="chat-header">
+        <strong>Chat</strong>
+        <span id="status" class="status">Loading templates…</span>
+      </header>
+      <div id="messages" class="messages"></div>
+    </section>
+  </main>
+
+  <div class="viewer" id="markdownViewer">
+    <div class="viewer-modal" role="dialog" aria-modal="true" aria-label="Markdown Viewer">
+      <div class="viewer-head">
+        <h2 class="viewer-title" id="viewerTitle">Markdown Report</h2>
+        <button class="viewer-close" id="closeViewerBtn">Close</button>
+      </div>
+      <div class="viewer-body" id="viewerBody">Loading…</div>
+    </div>
+  </div>
+
+  <script>
+    const templateEl = document.getElementById('template');
+    const filesEl = document.getElementById('files');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn = document.getElementById('sendBtn');
+    const statusEl = document.getElementById('status');
+    const messagesEl = document.getElementById('messages');
+    const fileMetaEl = document.getElementById('fileMeta');
+    const markdownViewerEl = document.getElementById('markdownViewer');
+    const closeViewerBtnEl = document.getElementById('closeViewerBtn');
+    const viewerBodyEl = document.getElementById('viewerBody');
+    const viewerTitleEl = document.getElementById('viewerTitle');
+
+    function setStatus(text, type = '') {
+      statusEl.textContent = text;
+      statusEl.className = `status ${type}`.trim();
+    }
+
+    function addMessage(text, role = 'system', links = []) {
+      const bubble = document.createElement('div');
+      bubble.className = `bubble ${role}`;
+      bubble.textContent = text;
+
+      if (links.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'result-links';
+        links.forEach(({ label, href, onClick }) => {
+          if (onClick) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = label;
+            btn.addEventListener('click', onClick);
+            wrap.appendChild(btn);
+            return;
+          }
+
+          const a = document.createElement('a');
+          a.href = href;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = label;
+          wrap.appendChild(a);
+        });
+        bubble.appendChild(wrap);
+      }
+
+      messagesEl.appendChild(bubble);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function openMarkdownViewer(url) {
+      viewerBodyEl.textContent = 'Loading markdown report...';
+      viewerTitleEl.textContent = 'Markdown Report';
+      markdownViewerEl.classList.add('open');
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Could not load markdown (${response.status})`);
+        }
+        const markdown = await response.text();
+        viewerBodyEl.innerHTML = renderMarkdown(markdown);
+      } catch (error) {
+        viewerBodyEl.textContent = `Unable to load markdown report.\n${error.message}`;
+      }
+    }
+
+    function escapeHtml(text) {
+      return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderInline(text) {
+      let html = escapeHtml(text);
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      return html;
+    }
+
+    function renderMarkdown(markdown) {
+      const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+      const out = [];
+      let inCode = false;
+      let inList = false;
+      let listType = '';
+      let tableBuffer = [];
+
+      const closeList = () => {
+        if (inList) {
+          out.push(`</${listType}>`);
+          inList = false;
+          listType = '';
+        }
+      };
+
+      const flushTable = () => {
+        if (!tableBuffer.length) return;
+        const rows = tableBuffer.map((row) => row.split('|').slice(1, -1).map((c) => c.trim()));
+        if (rows.length < 2) {
+          rows.forEach((r) => out.push(`<p>${renderInline(r.join(' | '))}</p>`));
+        } else {
+          const header = rows[0];
+          const bodyRows = rows.slice(2);
+          out.push('<table><thead><tr>');
+          header.forEach((h) => out.push(`<th>${renderInline(h)}</th>`));
+          out.push('</tr></thead><tbody>');
+          bodyRows.forEach((r) => {
+            out.push('<tr>');
+            r.forEach((c) => out.push(`<td>${renderInline(c)}</td>`));
+            out.push('</tr>');
+          });
+          out.push('</tbody></table>');
+        }
+        tableBuffer = [];
+      };
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (trimmed.startsWith('```')) {
+          flushTable();
+          closeList();
+          if (!inCode) {
+            inCode = true;
+            out.push('<pre><code>');
+          } else {
+            inCode = false;
+            out.push('</code></pre>');
+          }
+          continue;
+        }
+
+        if (inCode) {
+          out.push(`${escapeHtml(line)}\n`);
+          continue;
+        }
+
+        if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+          closeList();
+          tableBuffer.push(trimmed);
+          continue;
+        } else {
+          flushTable();
+        }
+
+        if (!trimmed) {
+          closeList();
+          out.push('<br/>');
+          continue;
+        }
+
+        const h = trimmed.match(/^(#{1,4})\s+(.+)/);
+        if (h) {
+          closeList();
+          const level = h[1].length;
+          out.push(`<h${level}>${renderInline(h[2])}</h${level}>`);
+          continue;
+        }
+
+        if (/^[-*]\s+/.test(trimmed)) {
+          if (!inList || listType !== 'ul') {
+            closeList();
+            inList = true;
+            listType = 'ul';
+            out.push('<ul>');
+          }
+          out.push(`<li>${renderInline(trimmed.replace(/^[-*]\s+/, ''))}</li>`);
+          continue;
+        }
+
+        if (/^\d+\.\s+/.test(trimmed)) {
+          if (!inList || listType !== 'ol') {
+            closeList();
+            inList = true;
+            listType = 'ol';
+            out.push('<ol>');
+          }
+          out.push(`<li>${renderInline(trimmed.replace(/^\d+\.\s+/, ''))}</li>`);
+          continue;
+        }
+
+        closeList();
+        if (/^---+$/.test(trimmed)) {
+          out.push('<hr/>');
+          continue;
+        }
+        out.push(`<p>${renderInline(trimmed)}</p>`);
+      }
+
+      flushTable();
+      closeList();
+      return out.join('');
+    }
+
+    function closeMarkdownViewer() {
+      markdownViewerEl.classList.remove('open');
+    }
+
+    closeViewerBtnEl.addEventListener('click', closeMarkdownViewer);
+    markdownViewerEl.addEventListener('click', (event) => {
+      if (event.target === markdownViewerEl) {
+        closeMarkdownViewer();
+      }
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && markdownViewerEl.classList.contains('open')) {
+        closeMarkdownViewer();
+      }
+    });
+
+    async function loadTemplates() {
+      try {
+        const res = await fetch('/ai/templates');
+        if (!res.ok) throw new Error('Could not load templates');
+        const data = await res.json();
+        templateEl.innerHTML = '';
+        data.templates.forEach((t) => {
+          const option = document.createElement('option');
+          option.value = t.name;
+          option.textContent = `${t.label} (${t.name})`;
+          templateEl.appendChild(option);
+        });
+        setStatus('Ready', 'ok');
+        addMessage('Template list loaded. Upload files and click "Process Documents".');
+      } catch (err) {
+        setStatus('Template load failed', 'err');
+        addMessage(`Error loading templates: ${err.message}`, 'system');
+      }
+    }
+
+    filesEl.addEventListener('change', () => {
+      const names = [...filesEl.files].map((f) => f.name);
+      fileMetaEl.textContent = names.length ? `${names.length} file(s): ${names.join(', ')}` : 'No files selected.';
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      if (!filesEl.files.length) {
+        addMessage('Please select at least one file first.', 'system');
+        return;
+      }
+
+      const selectedTemplate = templateEl.value;
+      const instruction = promptEl.value.trim();
+
+      addMessage(`Template: ${selectedTemplate}\nFiles: ${[...filesEl.files].map(f => f.name).join(', ')}\nInstruction: ${instruction || '(none)'}`, 'user');
+      setStatus('Processing…');
+      sendBtn.disabled = true;
+
+      const formData = new FormData();
+      [...filesEl.files].forEach((file) => formData.append('files', file));
+      formData.append('template_name', selectedTemplate);
+      formData.append('prompt', instruction);
+
+      try {
+        const res = await fetch('/ai/process', { method: 'POST', body: formData });
+        const payload = await res.json();
+        if (!res.ok) {
+          throw new Error(payload.detail || 'Processing failed');
+        }
+
+        const links = [];
+        if (payload.markdown_download_url) {
+          links.push({ label: 'View Markdown', onClick: () => openMarkdownViewer(payload.markdown_download_url) });
+          links.push({ label: 'Download Markdown Report', href: payload.markdown_download_url });
+        }
+        if (payload.csv_download_url) links.push({ label: 'Download CSV Flags', href: payload.csv_download_url });
+        if (!links.length && payload.download_url) links.push({ label: 'Download Output', href: payload.download_url });
+
+        const summary = [
+          `Status: ${payload.status}`,
+          `Format: ${payload.format}`,
+          `Output Folder: ${payload.folder}`
+        ].join('\n');
+
+        addMessage(summary, 'system', links);
+        setStatus('Completed', 'ok');
+      } catch (err) {
+        addMessage(`Processing error: ${err.message}`, 'system');
+        setStatus('Failed', 'err');
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
+    loadTemplates();
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+langchain
+langchain-anthropic
+langchain-text-splitters
+langchain-core
+langchain-community
+python-dotenv
+PyPDF2
+anthropic
+python-multipart
