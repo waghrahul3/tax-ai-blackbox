@@ -4,6 +4,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from structlog.contextvars import bind_contextvars, unbind_contextvars
 from typing import List, Optional
 
 from engine.pipeline import DocumentPipeline
@@ -62,33 +63,42 @@ async def process_documents(
     )
 ):
 
-    template_config = None
-    if template_name:
-        try:
-            template_config = get_prompt_template(template_name)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    unbind_fields = []
+    if ctid:
+        bind_contextvars(ctid=ctid)
+        unbind_fields.append("ctid")
 
-    logger.info(
-        "Processing request",
-        extra=build_log_extra(
-            request,
-            template=template_name,
-            file_count=len(files),
-            ctid=ctid
+    try:
+        template_config = None
+        if template_name:
+            try:
+                template_config = get_prompt_template(template_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        logger.info(
+            "Processing request",
+            extra=build_log_extra(
+                request,
+                template=template_name,
+                file_count=len(files),
+                ctid=ctid
+            )
         )
-    )
 
-    documents = await load_documents(files, storage)
+        documents = await load_documents(files, storage)
 
-    summary = await pipeline.run(
-        documents,
-        user_instruction=prompt,
-        template_name=template_name,
-        template_config=template_config
-    )
+        summary = await pipeline.run(
+            documents,
+            user_instruction=prompt,
+            template_name=template_name,
+            template_config=template_config
+        )
 
-    output = generate_output_file(summary, template_config=template_config)
+        output = generate_output_file(summary, template_config=template_config)
+    finally:
+        if unbind_fields:
+            unbind_contextvars(*unbind_fields)
 
     logger.info(
         "Output generated",
@@ -148,23 +158,32 @@ async def download_file(
     ctid: Optional[str] = Query(None, description="Optional correlation tracking ID passed through to server logs")
 ):
 
-    requested_path = os.path.normpath(file_path)
-    absolute_path = os.path.abspath(requested_path)
-    output_root = os.path.abspath("output")
+    unbind_fields = []
+    if ctid:
+        bind_contextvars(ctid=ctid)
+        unbind_fields.append("ctid")
 
-    if not absolute_path.startswith(f"{output_root}{os.sep}"):
-        raise HTTPException(status_code=400, detail="Invalid file path. Only output files can be downloaded.")
+    try:
+        requested_path = os.path.normpath(file_path)
+        absolute_path = os.path.abspath(requested_path)
+        output_root = os.path.abspath("output")
 
-    if not os.path.isfile(absolute_path):
-        raise HTTPException(status_code=404, detail="Requested file not found.")
+        if not absolute_path.startswith(f"{output_root}{os.sep}"):
+            raise HTTPException(status_code=400, detail="Invalid file path. Only output files can be downloaded.")
 
-    logger.info(
-        "Downloading output file",
-        extra=build_log_extra(request, path=absolute_path, ctid=ctid)
-    )
+        if not os.path.isfile(absolute_path):
+            raise HTTPException(status_code=404, detail="Requested file not found.")
 
-    return FileResponse(
-        path=absolute_path,
-        filename=os.path.basename(absolute_path),
-        media_type="application/octet-stream"
-    )
+        logger.info(
+            "Downloading output file",
+            extra=build_log_extra(request, path=absolute_path, ctid=ctid)
+        )
+
+        return FileResponse(
+            path=absolute_path,
+            filename=os.path.basename(absolute_path),
+            media_type="application/octet-stream"
+        )
+    finally:
+        if unbind_fields:
+            unbind_contextvars(*unbind_fields)
