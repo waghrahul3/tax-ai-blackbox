@@ -53,6 +53,11 @@ def _contains_csv_block(text: str) -> bool:
     return bool(re.search(r"```csv\s*\n.*?\n```", text, re.DOTALL | re.IGNORECASE))
 
 
+def _remove_csv_blocks(text: str) -> str:
+
+    return re.sub(r"```csv\s*\n.*?\n```", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
 class OutputDetector:
 
     @staticmethod
@@ -63,7 +68,13 @@ class OutputDetector:
         if _is_json(text):
             return "json"
 
-        if _is_pure_csv(text) or _contains_csv_block(text):
+        if _is_pure_csv(text):
+            return "csv"
+
+        if _contains_csv_block(text):
+            remaining_text = _remove_csv_blocks(text)
+            if remaining_text:
+                return "markdown"
             return "csv"
 
         if re.search(r"^#", text, re.MULTILINE):

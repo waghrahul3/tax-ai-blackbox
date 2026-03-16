@@ -3,7 +3,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import FileResponse
-from typing import List
+from typing import List, Optional
 
 from engine.pipeline import DocumentPipeline
 from services.document_loader import load_documents
@@ -22,19 +22,24 @@ logger = get_logger(__name__)
 @router.post(
     "/ai/process",
     summary="Process documents with AI",
-    description="Upload multiple files (PDF, JPG, JPEG, PNG, CSV) and process them using a selected template"
+    description="Upload multiple files (PDF, JPG, JPEG, PNG, CSV) and process them using a required prompt and an optional template"
 )
 async def process_documents(
     request: Request,
     files: List[UploadFile] = File(..., description="Upload one or more files to process"),
-    template_name: str = Form(..., description="Template name (e.g., 't_slip_data_extraction', 'medical_tax_credit')"),
-    prompt: str = Form("", description="Optional custom instructions for processing")
+    template_name: Optional[str] = Form(
+        None,
+        description="Optional template name (e.g., 't_slip_data_extraction', 'medical_tax_credit')"
+    ),
+    prompt: str = Form(..., min_length=1, description="Required instruction for processing")
 ):
 
-    try:
-        template_config = get_prompt_template(template_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    template_config = None
+    if template_name:
+        try:
+            template_config = get_prompt_template(template_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info("Processing request", extra={"template": template_name, "file_count": len(files)})
 
@@ -54,11 +59,16 @@ async def process_documents(
         extra={"format": output["format"], "path": output["file_path"]}
     )
 
-    download_url = f"{request.url_for('download_file')}?file_path={quote(output['file_path'])}"
+    download_path = request.url_for("download_file").path
+    download_url = f"{download_path}?file_path={quote(output['file_path'])}"
     csv_file_path = output.get("csv_file_path")
     csv_download_url = None
+    zip_file_path = output.get("zip_file_path")
+    zip_download_url = None
     if csv_file_path:
-        csv_download_url = f"{request.url_for('download_file')}?file_path={quote(csv_file_path)}"
+        csv_download_url = f"{download_path}?file_path={quote(csv_file_path)}"
+    if zip_file_path:
+        zip_download_url = f"{download_path}?file_path={quote(zip_file_path)}"
 
     return {
         "status": "success",
@@ -69,7 +79,9 @@ async def process_documents(
         "markdown_file": output["file_path"] if output["format"] == "markdown" else None,
         "markdown_download_url": download_url if output["format"] == "markdown" else None,
         "csv_file": csv_file_path if csv_file_path else (output["file_path"] if output["format"] == "csv" else None),
-        "csv_download_url": csv_download_url if csv_download_url else (download_url if output["format"] == "csv" else None)
+        "csv_download_url": csv_download_url if csv_download_url else (download_url if output["format"] == "csv" else None),
+        "zip_file": zip_file_path,
+        "zip_download_url": zip_download_url
     }
 
 

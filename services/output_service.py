@@ -1,5 +1,6 @@
 import os
 import re
+import zipfile
 from datetime import datetime
 from uuid import uuid4
 
@@ -57,6 +58,22 @@ def _remove_csv_block(content: str) -> str:
 
     cleaned = re.sub(r"```csv\s*\n.*?\n```", "", content, flags=re.DOTALL | re.IGNORECASE)
     return cleaned.strip()
+
+
+def _create_output_zip(output_folder: str) -> str:
+
+    folder_name = os.path.basename(output_folder)
+    zip_path = os.path.join(OUTPUT_ROOT, f"{folder_name}.zip")
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(output_folder):
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                arcname = os.path.relpath(file_path, output_folder)
+                zipf.write(file_path, arcname=arcname)
+
+    logger.info("Generated zip archive for output folder", extra={"zip_path": zip_path, "folder": output_folder})
+    return zip_path
 
 
 def generate_output_file(content, template_config=None):
@@ -144,9 +161,12 @@ def generate_output_file(content, template_config=None):
         }
     )
 
+    zip_file_path = _create_output_zip(output_folder)
+
     return {
         "format": format_type,
         "file_path": path,
         "folder_path": output_folder,
-        "csv_file_path": csv_file_path
+        "csv_file_path": csv_file_path,
+        "zip_file_path": zip_file_path
     }

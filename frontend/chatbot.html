@@ -565,6 +565,10 @@
         if (!res.ok) throw new Error('Could not load templates');
         const data = await res.json();
         templateEl.innerHTML = '';
+        const noTemplateOption = document.createElement('option');
+        noTemplateOption.value = '';
+        noTemplateOption.textContent = 'No template (Prompt only)';
+        templateEl.appendChild(noTemplateOption);
         data.templates.forEach((t) => {
           const option = document.createElement('option');
           option.value = t.name;
@@ -593,13 +597,15 @@
       const selectedTemplate = templateEl.value;
       const instruction = promptEl.value.trim();
 
-      addMessage(`Template: ${selectedTemplate}\nFiles: ${[...filesEl.files].map(f => f.name).join(', ')}\nInstruction: ${instruction || '(none)'}`, 'user');
+      addMessage(`Template: ${selectedTemplate || '(prompt-only mode)'}\nFiles: ${[...filesEl.files].map(f => f.name).join(', ')}\nInstruction: ${instruction || '(none)'}`, 'user');
       setStatus('Processing…');
       sendBtn.disabled = true;
 
       const formData = new FormData();
       [...filesEl.files].forEach((file) => formData.append('files', file));
-      formData.append('template_name', selectedTemplate);
+      if (selectedTemplate) {
+        formData.append('template_name', selectedTemplate);
+      }
       formData.append('prompt', instruction);
 
       try {
