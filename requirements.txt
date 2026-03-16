@@ -9,3 +9,4 @@ python-dotenv
 PyPDF2
 anthropic
 python-multipart
+structlog

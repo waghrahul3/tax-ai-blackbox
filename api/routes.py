@@ -11,7 +11,7 @@ from services.document_loader import load_documents
 from services.output_service import generate_output_file
 from storage.storage_factory import get_storage
 from core.prompt_templates import get_prompt_template, list_prompt_templates
-from utils.logger import get_logger
+from utils.logger import get_logger, build_log_extra
 
 class ProcessResponse(BaseModel):
 
@@ -20,6 +20,7 @@ class ProcessResponse(BaseModel):
     file: str = Field(description="Path to the primary generated file")
     folder: str = Field(description="Run folder path containing all artifacts")
     download_url: str = Field(description="Relative URL to download the main output")
+    ctid: Optional[str] = Field(default=None, description="Correlation tracking ID echoed back to caller")
     markdown_file: Optional[str] = Field(default=None, description="Markdown file path when available")
     markdown_download_url: Optional[str] = Field(default=None, description="Download URL for markdown output")
     csv_file: Optional[str] = Field(default=None, description="CSV file path when available")
@@ -40,8 +41,9 @@ logger = get_logger(__name__)
     summary="Process documents with AI",
     description=(
         "Upload one or more supported files (PDF, JPG, JPEG, PNG, CSV) and process them with a required prompt. "
-        "Optionally select a prompt template for opinionated workflows. The response includes download URLs for the "
-        "primary output plus any markdown, CSV, or ZIP bundles that were generated."
+        "Optionally select a prompt template for opinionated workflows and pass an optional CTID for log correlation. "
+        "The response includes download URLs for the primary output plus any markdown, CSV, or ZIP bundles that were generated, "
+        "and echoes the CTID when provided."
     ),
     response_description="JSON payload describing the aggregate output and download links",
     response_model=ProcessResponse
@@ -53,7 +55,11 @@ async def process_documents(
         None,
         description="Optional template name (e.g., 't_slip_data_extraction', 'medical_tax_credit')"
     ),
-    prompt: str = Form(..., min_length=1, description="Required instruction for processing")
+    prompt: str = Form(..., min_length=1, description="Required instruction for processing"),
+    ctid: Optional[str] = Form(
+        None,
+        description="Optional correlation tracking ID passed through to server logs"
+    )
 ):
 
     template_config = None
@@ -63,7 +69,15 @@ async def process_documents(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    logger.info("Processing request", extra={"template": template_name, "file_count": len(files)})
+    logger.info(
+        "Processing request",
+        extra=build_log_extra(
+            request,
+            template=template_name,
+            file_count=len(files),
+            ctid=ctid
+        )
+    )
 
     documents = await load_documents(files, storage)
 
@@ -78,7 +92,13 @@ async def process_documents(
 
     logger.info(
         "Output generated",
-        extra={"format": output["format"], "path": output["file_path"]}
+        extra=build_log_extra(
+            request,
+            format=output["format"],
+            path=output["file_path"],
+            folder=output["folder_path"],
+            ctid=ctid
+        )
     )
 
     download_path = request.url_for("download_file").path
@@ -103,7 +123,8 @@ async def process_documents(
         "csv_file": csv_file_path if csv_file_path else (output["file_path"] if output["format"] == "csv" else None),
         "csv_download_url": csv_download_url if csv_download_url else (download_url if output["format"] == "csv" else None),
         "zip_file": zip_file_path,
-        "zip_download_url": zip_download_url
+        "zip_download_url": zip_download_url,
+        "ctid": ctid
     }
 
 
@@ -121,7 +142,11 @@ async def list_templates():
 
 
 @router.get("/ai/download", name="download_file")
-async def download_file(file_path: str = Query(..., description="File path returned from /ai/process response")):
+async def download_file(
+    request: Request,
+    file_path: str = Query(..., description="File path returned from /ai/process response"),
+    ctid: Optional[str] = Query(None, description="Optional correlation tracking ID passed through to server logs")
+):
 
     requested_path = os.path.normpath(file_path)
     absolute_path = os.path.abspath(requested_path)
@@ -133,7 +158,10 @@ async def download_file(file_path: str = Query(..., description="File path retur
     if not os.path.isfile(absolute_path):
         raise HTTPException(status_code=404, detail="Requested file not found.")
 
-    logger.info("Downloading output file", extra={"path": absolute_path})
+    logger.info(
+        "Downloading output file",
+        extra=build_log_extra(request, path=absolute_path, ctid=ctid)
+    )
 
     return FileResponse(
         path=absolute_path,
