@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 from engine.pipeline import DocumentPipeline
@@ -11,6 +12,21 @@ from services.output_service import generate_output_file
 from storage.storage_factory import get_storage
 from core.prompt_templates import get_prompt_template, list_prompt_templates
 from utils.logger import get_logger
+
+class ProcessResponse(BaseModel):
+
+    status: str = Field(description="Processing status message")
+    format: str = Field(description="Detected output format e.g. markdown, csv")
+    file: str = Field(description="Path to the primary generated file")
+    folder: str = Field(description="Run folder path containing all artifacts")
+    download_url: str = Field(description="Relative URL to download the main output")
+    markdown_file: Optional[str] = Field(default=None, description="Markdown file path when available")
+    markdown_download_url: Optional[str] = Field(default=None, description="Download URL for markdown output")
+    csv_file: Optional[str] = Field(default=None, description="CSV file path when available")
+    csv_download_url: Optional[str] = Field(default=None, description="Download URL for CSV output")
+    zip_file: Optional[str] = Field(default=None, description="ZIP archive path containing the run outputs")
+    zip_download_url: Optional[str] = Field(default=None, description="Download URL for the ZIP archive")
+
 
 router = APIRouter()
 
@@ -22,7 +38,13 @@ logger = get_logger(__name__)
 @router.post(
     "/ai/process",
     summary="Process documents with AI",
-    description="Upload multiple files (PDF, JPG, JPEG, PNG, CSV) and process them using a required prompt and an optional template"
+    description=(
+        "Upload one or more supported files (PDF, JPG, JPEG, PNG, CSV) and process them with a required prompt. "
+        "Optionally select a prompt template for opinionated workflows. The response includes download URLs for the "
+        "primary output plus any markdown, CSV, or ZIP bundles that were generated."
+    ),
+    response_description="JSON payload describing the aggregate output and download links",
+    response_model=ProcessResponse
 )
 async def process_documents(
     request: Request,
