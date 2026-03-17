@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import zipfile
@@ -76,7 +77,7 @@ def _create_output_zip(output_folder: str) -> str:
     return zip_path
 
 
-def generate_output_file(content, template_config=None):
+def generate_output_file(content, template_config=None, base64_chunks=None):
 
     logger.debug(
         "Starting output file generation",
@@ -122,6 +123,8 @@ def generate_output_file(content, template_config=None):
 
     content_to_write = content
     csv_file_path = None
+    base64_file_path = None
+    base64_zip_path = None
     if format_type == "csv":
         content_to_write = _sanitize_csv_content(content)
         logger.debug(
@@ -148,6 +151,31 @@ def generate_output_file(content, template_config=None):
                 extra={"csv_path": csv_file_path}
             )
 
+    if base64_chunks:
+        base64_filename = "base64_chunks.json"
+        base64_file_path = os.path.join(output_folder, base64_filename)
+        with open(base64_file_path, "w", encoding="utf-8") as base64_file:
+            payload = {
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "chunk_count": len(base64_chunks),
+                "chunks": base64_chunks
+            }
+            json.dump(payload, base64_file, indent=2)
+
+        logger.info(
+            "Captured base64 chunk payload",
+            extra={"base64_path": base64_file_path, "chunk_count": len(base64_chunks)}
+        )
+
+        base64_zip_path = os.path.join(output_folder, "base64_chunks.zip")
+        with zipfile.ZipFile(base64_zip_path, "w", zipfile.ZIP_DEFLATED) as base64_zip:
+            base64_zip.write(base64_file_path, arcname=base64_filename)
+
+        logger.info(
+            "Created base64 zip artifact",
+            extra={"base64_zip_path": base64_zip_path}
+        )
+
     with open(path, "w", encoding="utf-8") as f:
         f.write(content_to_write)
 
@@ -168,5 +196,7 @@ def generate_output_file(content, template_config=None):
         "file_path": path,
         "folder_path": output_folder,
         "csv_file_path": csv_file_path,
-        "zip_file_path": zip_file_path
+        "zip_file_path": zip_file_path,
+        "base64_file_path": base64_file_path,
+        "base64_zip_path": base64_zip_path
     }

@@ -28,6 +28,10 @@ class ProcessResponse(BaseModel):
     csv_download_url: Optional[str] = Field(default=None, description="Download URL for CSV output")
     zip_file: Optional[str] = Field(default=None, description="ZIP archive path containing the run outputs")
     zip_download_url: Optional[str] = Field(default=None, description="Download URL for the ZIP archive")
+    base64_file: Optional[str] = Field(default=None, description="JSON file capturing base64-encoded chunks when enabled")
+    base64_download_url: Optional[str] = Field(default=None, description="Download URL for the base64 JSON artifact")
+    base64_zip_file: Optional[str] = Field(default=None, description="ZIP archive containing the base64 JSON artifact")
+    base64_zip_download_url: Optional[str] = Field(default=None, description="Download URL for the base64 ZIP archive")
 
 
 router = APIRouter()
@@ -88,14 +92,21 @@ async def process_documents(
 
         documents = await load_documents(files, storage)
 
-        summary = await pipeline.run(
+        pipeline_result = await pipeline.run(
             documents,
             user_instruction=prompt,
             template_name=template_name,
             template_config=template_config
         )
 
-        output = generate_output_file(summary, template_config=template_config)
+        base64_chunks = pipeline_result.get("base64_chunks") if isinstance(pipeline_result, dict) else None
+        summary_text = pipeline_result.get("summary") if isinstance(pipeline_result, dict) else pipeline_result
+
+        output = generate_output_file(
+            summary_text,
+            template_config=template_config,
+            base64_chunks=base64_chunks
+        )
     finally:
         if unbind_fields:
             unbind_contextvars(*unbind_fields)
@@ -117,10 +128,18 @@ async def process_documents(
     csv_download_url = None
     zip_file_path = output.get("zip_file_path")
     zip_download_url = None
+    base64_file_path = output.get("base64_file_path")
+    base64_download_url = None
+    base64_zip_path = output.get("base64_zip_path")
+    base64_zip_download_url = None
     if csv_file_path:
         csv_download_url = f"{download_path}?file_path={quote(csv_file_path)}"
     if zip_file_path:
         zip_download_url = f"{download_path}?file_path={quote(zip_file_path)}"
+    if base64_file_path:
+        base64_download_url = f"{download_path}?file_path={quote(base64_file_path)}"
+    if base64_zip_path:
+        base64_zip_download_url = f"{download_path}?file_path={quote(base64_zip_path)}"
 
     return {
         "status": "success",
@@ -134,6 +153,10 @@ async def process_documents(
         "csv_download_url": csv_download_url if csv_download_url else (download_url if output["format"] == "csv" else None),
         "zip_file": zip_file_path,
         "zip_download_url": zip_download_url,
+        "base64_file": base64_file_path,
+        "base64_download_url": base64_download_url,
+        "base64_zip_file": base64_zip_path,
+        "base64_zip_download_url": base64_zip_download_url,
         "ctid": ctid
     }
 

@@ -1,9 +1,15 @@
-from core.config import DEFAULT_TEMPERATURE
+from core.config import (
+    DEFAULT_TEMPERATURE,
+    ENABLE_PANDAS_CLEANING,
+    ENABLE_CHUNKING,
+    ENABLE_BASE64_INPUT
+)
 from core.llm_factory import get_llm
 from engine.chunk_engine import create_chunks
 from engine.map_worker import summarize_chunks
 from engine.reduce_worker import reduce_summaries
 from utils.logger import get_logger
+from utils.pandas_cleaner import normalize_tabular_text
 
 
 class DocumentPipeline:
@@ -32,23 +38,48 @@ class DocumentPipeline:
         text_docs = [d for d in documents if d.is_text()]
         image_docs = [d for d in documents if d.is_image()]
 
+        if ENABLE_PANDAS_CLEANING and text_docs:
+            self._normalize_text_documents(text_docs)
+
         self.logger.info(
             "Processing documents",
-            extra={"text_docs": len(text_docs), "image_docs": len(image_docs)}
+            extra={
+                "text_docs": len(text_docs),
+                "image_docs": len(image_docs),
+                "chunking_enabled": ENABLE_CHUNKING,
+                "base64_enabled": ENABLE_BASE64_INPUT
+            }
         )
 
         combined_text = "\n\n".join(d.text_content for d in text_docs if d.text_content)
 
-        self.logger.debug("Creating chunks", extra={"text_length": len(combined_text)})
-
-        chunks = create_chunks(combined_text) if combined_text else []
+        if ENABLE_CHUNKING:
+            self.logger.debug(
+                "Creating chunks",
+                extra={"text_length": len(combined_text)}
+            )
+            chunks = create_chunks(combined_text) if combined_text else []
+        else:
+            chunks = [d.text_content for d in text_docs if d.text_content]
+            self.logger.info(
+                "Chunking disabled; feeding raw documents",
+                extra={"raw_chunk_count": len(chunks)}
+            )
 
         self.logger.info(
             "Summarizing content",
             extra={"text_chunks": len(chunks), "images": len(image_docs)}
         )
 
-        chunk_summaries = await summarize_chunks(chunks, llm, image_docs)
+        base64_collector = [] if ENABLE_BASE64_INPUT else None
+
+        chunk_summaries = await summarize_chunks(
+            chunks,
+            llm,
+            image_docs,
+            use_base64=ENABLE_BASE64_INPUT,
+            base64_collector=base64_collector
+        )
 
         self.logger.info("Reducing summaries", extra={"summary_count": len(chunk_summaries)})
 
@@ -61,4 +92,45 @@ class DocumentPipeline:
 
         self.logger.info("Reduce step completed", extra={"summary_length": len(final_summary)})
 
-        return final_summary
+        return {
+            "summary": final_summary,
+            "base64_chunks": base64_collector if base64_collector else None
+        }
+
+    def _normalize_text_documents(self, documents):
+
+        for doc in documents:
+            if not doc.text_content:
+                continue
+
+            original_text = doc.text_content
+            cleaned_text = normalize_tabular_text(original_text)
+
+            if cleaned_text == original_text:
+                self.logger.debug(
+                    "Pandas cleaner skipped (no change)",
+                    extra={
+                        "file_name": doc.filename,
+                        "input_preview": original_text[:200]
+                    }
+                )
+                continue
+
+            self.logger.info(
+                "Pandas cleaner applied",
+                extra={
+                    "file_name": doc.filename,
+                    "original_length": len(original_text),
+                    "cleaned_length": len(cleaned_text)
+                }
+            )
+            self.logger.debug(
+                "Pandas cleaner output",
+                extra={
+                    "file_name": doc.filename,
+                    "input_preview": original_text[:200],
+                    "output_preview": cleaned_text[:200]
+                }
+            )
+
+            doc.text_content = cleaned_text
