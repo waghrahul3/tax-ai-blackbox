@@ -1,8 +1,21 @@
 from core.prompt_templates import get_prompt_template
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+PROMPT_ONLY_TEMPLATE = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "{user_instruction}"  
+    ),
+    (
+        "human",
+        "You are provided with aggregated document summaries generated from the map stage.\n"
+        "{summaries}\n\n"
+        "User instruction (may be blank):\n"
+    )
+])
 
 
 async def reduce_summaries(summaries, llm, user_instruction, template_name=None):
@@ -41,19 +54,10 @@ async def reduce_summaries(summaries, llm, user_instruction, template_name=None)
         )
     else:
         logger.info("Using prompt-only reduce mode without template")
-        messages = [
-            SystemMessage(
-                content="You are a tax-document analysis assistant. Follow the user instruction exactly and produce a clear, complete output."
-            ),
-            HumanMessage(
-                content=(
-                    "You are provided with aggregated document summaries generated from the map stage.\n"
-                    f"{combined}\n\n"
-                    "User instruction:\n"
-                    f"{(user_instruction or '').strip()}"
-                )
-            )
-        ]
+        messages = PROMPT_ONLY_TEMPLATE.format_messages(
+            summaries=combined,
+            user_instruction=(user_instruction or "").strip()
+        )
 
     logger.debug(
         "Formatted messages for LLM",

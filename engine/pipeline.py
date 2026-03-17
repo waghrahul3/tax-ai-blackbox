@@ -1,3 +1,4 @@
+from core.config import DEFAULT_TEMPERATURE
 from core.llm_factory import get_llm
 from engine.chunk_engine import create_chunks
 from engine.map_worker import summarize_chunks
@@ -13,7 +14,7 @@ class DocumentPipeline:
 
     async def run(self, documents, user_instruction="", template_name=None, template_config=None):
 
-        temperature = 0.0
+        temperature = DEFAULT_TEMPERATURE
         if template_config and template_config.primary_step.temperature is not None:
             temperature = template_config.primary_step.temperature
             self.logger.info(
@@ -21,7 +22,10 @@ class DocumentPipeline:
                 extra={"temperature": temperature, "template": template_config.name}
             )
         else:
-            self.logger.info("Using default temperature", extra={"temperature": temperature})
+            self.logger.info(
+                "Using configured default temperature",
+                extra={"temperature": temperature}
+            )
 
         llm = get_llm(temperature=temperature)
 
