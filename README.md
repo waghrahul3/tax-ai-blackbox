@@ -4,7 +4,7 @@ AI-assisted FastAPI service for processing tax documents with prompt-driven work
 
 ## Features
 
-- **FastAPI backend with Swagger UI** – `/docs` documents all endpoints with clear descriptions, required prompt input, optional template selection, expected file types, and download link behavior (markdown/CSV/zip).
+- **FastAPI backend with Swagger UI** – `/docs` documents all endpoints with clear descriptions, required prompt input, optional template selection, CTID passthrough, expected file types, and download link behavior (markdown/CSV/zip/ZIP).
 - **AI document pipeline** – configurable prompt templates (e.g., T-slip verification, Ontario medical expense reconciliation) or ad-hoc prompt-only executions.
 - **Flexible file uploads** – accepts PDFs, images, and CSVs via multipart form data; supports multi-file ingestion.
 - **Rich output handling** – auto-detects format, sanitizes CSV blocks, splits markdown + CSV combinations into dedicated files, and packages each run folder into a ZIP archive.
@@ -28,7 +28,11 @@ source venv/bin/activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run the FastAPI server
+# 3. Copy env example and edit values
+cp .env.example .env
+# set ANTHROPIC_API_KEY, LOG_LEVEL, DEBUG_LOG_DIR, etc.
+
+# 4. Run the FastAPI server
 venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -39,12 +43,13 @@ venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ## API Overview
 
 ### `POST /ai/process`
-- **Purpose:** Process uploaded documents with a required `prompt`; optionally pass `template_name`.
+- **Purpose:** Process uploaded documents with a required `prompt`; optionally pass `template_name` and `ctid` (correlation tracking ID).
 - **Request:**
   - `files`: one or more PDF/JPG/PNG/CSV uploads (required)
   - `prompt`: string instructions for the LLM (required)
   - `template_name`: optional template key (`t_slip_data_extraction`, `medical_tax_credit`, etc.)
-- **Response:** JSON describing output format and download URLs for primary file, markdown split, CSV split, and ZIP archive. Links are relative (`/ai/download?...`) so they respect the originating host/proxy scheme.
+  - `ctid`: optional correlation ID echoed in logs and response
+- **Response:** JSON describing output format and download URLs for primary file, markdown split, CSV split, and ZIP archive plus the echoed `ctid`. Links are relative (`/ai/download?...`) so they respect the originating host/proxy scheme.
 
 ### `GET /ai/templates`
 Lists available prompt templates (name, label, description, per-step metadata).
@@ -84,6 +89,7 @@ Logs and `output/` are git-ignored by default via `.gitignore`.
 - **Swagger file field missing** – verify you’re running the patched FastAPI app (`main.py` overrides OpenAPI to mark file arrays as binary).
 - **Anthropic authentication errors** – confirm `ANTHROPIC_API_KEY` is exported in the environment where Uvicorn/Gunicorn is launched.
 - **Download link 404** – the `/ai/download` endpoint only allows files inside the `output/` folder; verify the run hasn’t been manually deleted.
+- **Structured logs not appearing** – set `LOG_LEVEL=DEBUG` and `DEBUG_LOG_DIR=logs` (or similar) to emit JSON logs via structlog. Files rotate automatically with date-stamped filenames (`app-debug-YYYYMMDD.log`) controlled by `LOG_FILE_MAX_BYTES` and `LOG_FILE_BACKUP_COUNT`.
 
 ## License
 

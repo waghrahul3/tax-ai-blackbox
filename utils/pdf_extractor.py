@@ -1,19 +1,26 @@
-from io import BytesIO
+import os
+import tempfile
 
-from PyPDF2 import PdfReader
+from langchain_community.document_loaders import PyMuPDFLoader
 
 
 def extract_text_from_pdf(data: bytes) -> str:
 
-    reader = PdfReader(BytesIO(data))
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(data)
+        tmp_path = tmp_file.name
 
-    texts = []
-
-    for page in reader.pages:
-
-        text = page.extract_text() or ""
-
-        if text.strip():
-            texts.append(text.strip())
-
-    return "\n\n".join(texts)
+    try:
+        loader = PyMuPDFLoader(tmp_path)
+        documents = loader.load()
+        texts = [
+            doc.page_content.strip()
+            for doc in documents
+            if getattr(doc, "page_content", "").strip()
+        ]
+        return "\n\n".join(texts)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
