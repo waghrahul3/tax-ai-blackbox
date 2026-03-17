@@ -25,6 +25,7 @@ htmlcov/
 
 # Logs and runtime files
 *.log
+*.log.*
 
 # Environment and secrets
 .env

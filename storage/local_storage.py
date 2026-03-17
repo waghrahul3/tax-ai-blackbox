@@ -31,6 +31,7 @@ class LocalStorage:
         data = await file.read()
         filename = getattr(file, "filename", "unknown")
         content_type = getattr(file, "content_type", "")
+        source_path = getattr(file, "file_path", None)
 
         if is_image_file(filename, content_type):
             media_type = get_image_media_type(filename, content_type)
@@ -59,7 +60,9 @@ class LocalStorage:
                 content_type="image",
                 filename=filename,
                 image_data=data,
-                image_media_type=media_type
+                image_media_type=media_type,
+                source_path=source_path,
+                source_media_type=media_type or content_type
             )
 
         if _looks_like_pdf(file, data):
@@ -75,7 +78,9 @@ class LocalStorage:
                     return DocumentContent(
                         content_type="text",
                         filename=filename,
-                        text_content=pdf_text
+                        text_content=pdf_text,
+                        source_path=source_path,
+                        source_media_type="application/pdf"
                     )
 
             except Exception:
@@ -93,7 +98,9 @@ class LocalStorage:
         return DocumentContent(
             content_type="text",
             filename=filename,
-            text_content=text_content
+            text_content=text_content,
+            source_path=source_path,
+            source_media_type=content_type or "text/plain"
         )
 
     def _extract_text_from_image(self, data: bytes, media_type: str) -> str:

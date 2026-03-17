@@ -24,7 +24,7 @@ async def load_documents(files, storage):
 
     logger.info(
         "Documents loaded",
-        extra={"total": len(documents), "text": text_count, "images": image_count}
+        extra={"total": len(documents), "text": text_count, "images": image_count, "file_paths": [f.file_path for f in files]}
     )
 
     return documents

@@ -37,6 +37,7 @@ class DocumentPipeline:
 
         text_docs = [d for d in documents if d.is_text()]
         image_docs = [d for d in documents if d.is_image()]
+        file_docs = [d for d in documents if getattr(d, "source_path", None)]
 
         if ENABLE_PANDAS_CLEANING and text_docs:
             self._normalize_text_documents(text_docs)
@@ -78,7 +79,8 @@ class DocumentPipeline:
             llm,
             image_docs,
             use_base64=ENABLE_BASE64_INPUT,
-            base64_collector=base64_collector
+            base64_collector=base64_collector,
+            file_docs=file_docs
         )
 
         self.logger.info("Reducing summaries", extra={"summary_count": len(chunk_summaries)})

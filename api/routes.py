@@ -10,6 +10,7 @@ from typing import List, Optional
 from engine.pipeline import DocumentPipeline
 from services.document_loader import load_documents
 from services.output_service import generate_output_file
+from services.upload_service import generate_request_id, persist_uploads
 from storage.storage_factory import get_storage
 from core.prompt_templates import get_prompt_template, list_prompt_templates
 from utils.logger import get_logger, build_log_extra
@@ -72,6 +73,8 @@ async def process_documents(
         bind_contextvars(ctid=ctid)
         unbind_fields.append("ctid")
 
+    request_id = generate_request_id()
+
     try:
         template_config = None
         if template_name:
@@ -86,11 +89,24 @@ async def process_documents(
                 request,
                 template=template_name,
                 file_count=len(files),
+                ctid=ctid,
+                request_id=request_id
+            )
+        )
+
+        saved_files, upload_dir = await persist_uploads(files, request_id)
+
+        logger.info(
+            "Uploads persisted",
+            extra=build_log_extra(
+                request,
+                upload_dir=upload_dir,
+                request_id=request_id,
                 ctid=ctid
             )
         )
 
-        documents = await load_documents(files, storage)
+        documents = await load_documents(saved_files, storage)
 
         pipeline_result = await pipeline.run(
             documents,
@@ -157,7 +173,8 @@ async def process_documents(
         "base64_download_url": base64_download_url,
         "base64_zip_file": base64_zip_path,
         "base64_zip_download_url": base64_zip_download_url,
-        "ctid": ctid
+        "ctid": ctid,
+        "request_id": request_id
     }
 
 
