@@ -7,6 +7,8 @@ langchain-core
 langchain-community
 python-dotenv
 PyPDF2
+pymupdf
+unstructured
 anthropic
 python-multipart
 structlog

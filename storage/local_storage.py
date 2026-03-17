@@ -1,3 +1,8 @@
+import os
+import tempfile
+
+from langchain_community.document_loaders.image import UnstructuredImageLoader
+
 from utils.logger import get_logger
 from utils.pdf_extractor import extract_text_from_pdf
 from utils.image_handler import is_image_file, get_image_media_type
@@ -32,6 +37,23 @@ class LocalStorage:
             self.logger.info(
                 "Detected image file",
                 extra={"file_name": filename, "media_type": media_type, "size": len(data)}
+            )
+
+            extracted_text = self._extract_text_from_image(data, media_type)
+            if extracted_text.strip():
+                self.logger.info(
+                    "Extracted image text via Unstructured",
+                    extra={"file_name": filename, "length": len(extracted_text)}
+                )
+                return DocumentContent(
+                    content_type="text",
+                    filename=filename,
+                    text_content=extracted_text
+                )
+
+            self.logger.warning(
+                "Falling back to binary image ingestion; no text extracted",
+                extra={"file_name": filename}
             )
             return DocumentContent(
                 content_type="image",
@@ -73,3 +95,37 @@ class LocalStorage:
             filename=filename,
             text_content=text_content
         )
+
+    def _extract_text_from_image(self, data: bytes, media_type: str) -> str:
+
+        suffix = ".png"
+        if media_type == "image/jpeg":
+            suffix = ".jpg"
+        elif media_type == "image/gif":
+            suffix = ".gif"
+        elif media_type == "image/webp":
+            suffix = ".webp"
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                tmp_file.write(data)
+                tmp_path = tmp_file.name
+
+            loader = UnstructuredImageLoader(tmp_path)
+            documents = loader.load()
+            pieces = [
+                doc.page_content.strip()
+                for doc in documents
+                if getattr(doc, "page_content", "").strip()
+            ]
+            return "\n\n".join(pieces)
+        except Exception:
+            self.logger.exception("Failed to extract text from image via Unstructured")
+            return ""
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass

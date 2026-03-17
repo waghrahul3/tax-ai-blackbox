@@ -3,10 +3,13 @@ import os
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
+
 from api.routes import router
+from core.config import APP_VERSION
 
 app = FastAPI(
     title="LangChain Multi Document Engine",
+    version=APP_VERSION,
     openapi_version="3.0.3"
 )
 
@@ -19,7 +22,7 @@ def custom_openapi():
 
     openapi_schema = get_openapi(
         title=app.title,
-        version="1.0.0",
+        version=APP_VERSION,
         routes=app.routes
     )
 
@@ -61,4 +64,4 @@ def chatbot_ui():
 
 @app.get("/")
 def health():
-    return {"status": "running"}
+    return {"status": "running", "version": APP_VERSION}
