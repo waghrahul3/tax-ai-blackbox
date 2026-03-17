@@ -247,20 +247,53 @@ async def _build_file_message(doc):
         )
         return None, None
 
-    media_type = doc.source_media_type or "application/octet-stream"
+    media_type = (doc.source_media_type or "application/octet-stream").lower()
 
+    if media_type == "application/pdf":
+        message = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "Summarize the attached document. Extract key facts, amounts, and tables in detail."
+                    )
+                },
+                {
+                    "type": "file",
+                    "mime_type": media_type,
+                    "base64": encoded_file
+                }
+            ]
+        )
+        return message, encoded_file
+
+    if media_type.startswith("image/"):
+        message = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
+                    )
+                },
+                {
+                    "type": "image",
+                    "base64": encoded_file,
+                    "mime_type": media_type
+                }
+            ]
+        )
+        return message, encoded_file
+
+    text_content = (getattr(doc, "text_content", None) or "").strip()
     message = HumanMessage(
         content=[
             {
                 "type": "text",
                 "text": (
-                    "Summarize the attached document. Extract key facts, amounts, and tables in detail."
+                    "Summarize this document. Extract key facts, amounts, and tables in detail.\n\n"
+                    f"{text_content}"
                 )
-            },
-            {
-                "type": "file",
-                "mime_type": media_type,
-                "base64": encoded_file
             }
         ]
     )
