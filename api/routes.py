@@ -31,8 +31,6 @@ class ProcessResponse(BaseModel):
     zip_download_url: Optional[str] = Field(default=None, description="Download URL for the ZIP archive")
     base64_file: Optional[str] = Field(default=None, description="JSON file capturing base64-encoded chunks when enabled")
     base64_download_url: Optional[str] = Field(default=None, description="Download URL for the base64 JSON artifact")
-    base64_zip_file: Optional[str] = Field(default=None, description="ZIP archive containing the base64 JSON artifact")
-    base64_zip_download_url: Optional[str] = Field(default=None, description="Download URL for the base64 ZIP archive")
 
 
 router = APIRouter()
@@ -146,16 +144,12 @@ async def process_documents(
     zip_download_url = None
     base64_file_path = output.get("base64_file_path")
     base64_download_url = None
-    base64_zip_path = output.get("base64_zip_path")
-    base64_zip_download_url = None
     if csv_file_path:
         csv_download_url = f"{download_path}?file_path={quote(csv_file_path)}"
     if zip_file_path:
         zip_download_url = f"{download_path}?file_path={quote(zip_file_path)}"
     if base64_file_path:
         base64_download_url = f"{download_path}?file_path={quote(base64_file_path)}"
-    if base64_zip_path:
-        base64_zip_download_url = f"{download_path}?file_path={quote(base64_zip_path)}"
 
     return {
         "status": "success",
@@ -171,8 +165,6 @@ async def process_documents(
         "zip_download_url": zip_download_url,
         "base64_file": base64_file_path,
         "base64_download_url": base64_download_url,
-        "base64_zip_file": base64_zip_path,
-        "base64_zip_download_url": base64_zip_download_url,
         "ctid": ctid,
         "request_id": request_id
     }

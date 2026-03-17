@@ -124,7 +124,6 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
     content_to_write = content
     csv_file_path = None
     base64_file_path = None
-    base64_zip_path = None
     if format_type == "csv":
         content_to_write = _sanitize_csv_content(content)
         logger.debug(
@@ -197,6 +196,5 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
         "folder_path": output_folder,
         "csv_file_path": csv_file_path,
         "zip_file_path": zip_file_path,
-        "base64_file_path": base64_file_path,
-        "base64_zip_path": base64_zip_path
+        "base64_file_path": base64_file_path
     }
