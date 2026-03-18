@@ -69,6 +69,48 @@ def _extract_csv_blocks(content: str) -> list:
             "original_section": filename
         })
     
+    # If no CSV Output pattern found, try pattern where filename is in code block
+    if not csv_blocks:
+        # Pattern: ## CSV Output 1 followed by ```filename.csv``` then actual CSV content
+        section_pattern = r"##\s*CSV\s+Output\s+\d+:\s*([^\n]*)\n```\s*([^\n\.]+\.csv)\s*```\s*```csv\s*\n(.*?)\n```"
+        matches = re.finditer(section_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for match in matches:
+            filename = match.group(2).strip()
+            csv_content = match.group(3).strip()
+            
+            # Clean filename for use in output filename
+            clean_name = filename.replace('.csv', '')
+            clean_name = re.sub(r"[^\w\s-]", "", clean_name)
+            clean_name = re.sub(r"\s+", "_", clean_name)
+            
+            csv_blocks.append({
+                "name": clean_name,
+                "content": csv_content,
+                "original_section": filename
+            })
+    
+    # If no CSV Output pattern found, try simple filename block followed by CSV content
+    if not csv_blocks:
+        # Pattern: ```filename.csv``` followed by ```csv content```
+        section_pattern = r"```\s*([^\n\.]+\.csv)\s*```\s*```csv\s*\n(.*?)\n```"
+        matches = re.finditer(section_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for match in matches:
+            filename = match.group(1).strip()
+            csv_content = match.group(2).strip()
+            
+            # Clean filename for use in output filename
+            clean_name = filename.replace('.csv', '')
+            clean_name = re.sub(r"[^\w\s-]", "", clean_name)
+            clean_name = re.sub(r"\s+", "_", clean_name)
+            
+            csv_blocks.append({
+                "name": clean_name,
+                "content": csv_content,
+                "original_section": filename
+            })
+    
     # If no CSV Output pattern found, try FILE X pattern
     if not csv_blocks:
         section_pattern = r"##\s*FILE\s+\d+:\s*([^\n\.]+\.csv).*?```csv\s*\n(.*?)\n```"
@@ -136,6 +178,10 @@ def _remove_all_csv_blocks(content: str) -> str:
     """Remove all CSV blocks from content."""
     # Remove CSV Output X patterns with CSV blocks
     cleaned = re.sub(r"##\s*CSV\s+Output\s+\d+:\s*[^\n\.]+\.csv.*?```csv\s*\n.*?\n```", "", content, flags=re.DOTALL | re.IGNORECASE)
+    # Remove CSV Output X patterns with filename in code block
+    cleaned = re.sub(r"##\s*CSV\s+Output\s+\d+:[^\n]*\n```\s*[^\n\.]+\.csv\s*```\s*```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    # Remove simple filename block patterns
+    cleaned = re.sub(r"```\s*[^\n\.]+\.csv\s*```\s*```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
     # Remove FILE X patterns with CSV blocks
     cleaned = re.sub(r"##\s*FILE\s+\d+:\s*[^\n\.]+\.csv.*?```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
     # Remove SECTION X patterns with CSV blocks
