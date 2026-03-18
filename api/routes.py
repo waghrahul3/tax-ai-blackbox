@@ -149,6 +149,10 @@ def _clean_markdown_formatting(content: str) -> str:
         '→': '->',    # arrows
         '—': '--',    # em dash
         '–': '-',     # en dash
+        '\u201c': '"',  # left double quotation mark (U+201C)
+        '\u201d': '"',  # right double quotation mark (U+201D)
+        '\u2018': "'",  # left single quotation mark (U+2018)
+        '\u2019': "'",  # right single quotation mark (U+2019)
     }
     
     # Create regex pattern for all Unicode characters
@@ -202,6 +206,7 @@ logger = get_logger(__name__)
     summary="Process documents with AI",
     description=(
         "Upload one or more supported files (PDF, JPG, JPEG, PNG, CSV) and process them with a required prompt. "
+        "The 'prompt' parameter is treated as user instruction, while 'system_prompt' defines the AI's behavior. "
         "Optionally select a prompt template for opinionated workflows and pass an optional CTID for log correlation. "
         "The response includes download URLs for the primary output plus any markdown, CSV, or ZIP bundles that were generated, "
         "and echoes the CTID when provided."
@@ -217,6 +222,10 @@ async def process_documents(
         description="Optional template name (e.g., 't_slip_data_extraction', 'medical_tax_credit')"
     ),
     prompt: str = Form(..., min_length=1, description="Required instruction for processing"),
+    system_prompt: Optional[str] = Form(
+        None,
+        description="Optional system prompt to override default behavior"
+    ),
     ctid: Optional[str] = Form(
         None,
         description="Optional correlation tracking ID passed through to server logs"
@@ -267,13 +276,22 @@ async def process_documents(
         unicode_cleaned_prompt = _clean_unicode_box_characters(decoded_prompt)
         final_prompt = _clean_markdown_formatting(unicode_cleaned_prompt)
 
+        # Process system_prompt if provided
+        final_system_prompt = None
+        if system_prompt:
+            decoded_system_prompt = unquote_plus(system_prompt)
+            unicode_cleaned_system_prompt = _clean_unicode_box_characters(decoded_system_prompt)
+            final_system_prompt = _clean_markdown_formatting(unicode_cleaned_system_prompt)
+
         logger.info(
             "Processed prompt",
             extra={
                 "original_length": len(prompt),
                 "decoded_length": len(decoded_prompt),
                 "unicode_cleaned_length": len(unicode_cleaned_prompt),
-                "final_length": len(final_prompt)
+                "final_length": len(final_prompt),
+                "system_prompt_provided": system_prompt is not None,
+                "system_prompt_length": len(final_system_prompt) if final_system_prompt else 0
             }
         )
 
@@ -282,7 +300,8 @@ async def process_documents(
                 documents,
                 user_instruction=final_prompt,
                 template_name=template_name,
-                template_config=template_config
+                template_config=template_config,
+                system_prompt=final_system_prompt
             )
         except Exception as e:
             # Handle Anthropic API errors gracefully

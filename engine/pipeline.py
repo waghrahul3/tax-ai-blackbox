@@ -2,7 +2,8 @@ from core.config import (
     DEFAULT_TEMPERATURE,
     ENABLE_PANDAS_CLEANING,
     ENABLE_CHUNKING,
-    ENABLE_BASE64_INPUT
+    ENABLE_BASE64_INPUT,
+    ENABLE_LLM_SUMMARIZATION
 )
 from core.llm_factory import get_llm
 from engine.chunk_engine import create_chunks
@@ -19,7 +20,7 @@ class DocumentPipeline:
 
         self.logger = get_logger(__name__)
 
-    async def run(self, documents, user_instruction="", template_name=None, template_config=None):
+    async def run(self, documents, user_instruction="", template_name=None, template_config=None, system_prompt=None):
 
         temperature = DEFAULT_TEMPERATURE
         if template_config and template_config.primary_step.temperature is not None:
@@ -52,7 +53,8 @@ class DocumentPipeline:
                 "text_docs": len(text_docs),
                 "image_docs": len(image_docs),
                 "chunking_enabled": ENABLE_CHUNKING,
-                "base64_enabled": ENABLE_BASE64_INPUT
+                "base64_enabled": ENABLE_BASE64_INPUT,
+                "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION
             }
         )
 
@@ -93,7 +95,9 @@ class DocumentPipeline:
             chunk_summaries,
             llm,
             user_instruction,
-            template_name=template_name
+            template_name=template_name,
+            base64_collector=base64_collector,
+            system_prompt=system_prompt
         )
 
         self.logger.info("Reduce step completed", extra={"summary_length": len(final_summary)})
