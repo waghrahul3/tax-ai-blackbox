@@ -118,6 +118,48 @@ def _clean_markdown_formatting(content: str) -> str:
     """
     import re
     
+    # First, handle HTML/JSON escaped characters
+    # Replace escaped newlines and common HTML entities
+    escape_mappings = {
+        '\\r\\n': '\n',
+        '\\r': '\n', 
+        '\\n': '\n',
+        '&amp;amp;': '&',
+        '&amp;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '&quot;': '"',
+        '&#39;': "'",
+        '&apos;': "'",
+        '&amp;#40;': '(',
+        '&amp;#41;': ')',
+        '&#40;': '(',
+        '&#41;': ')',
+        '&amp;#x27;': "'",
+        '&amp;#x2F;': '/',
+        '&#x27;': "'",
+        '&#x2F;': '/',
+    }
+    
+    # Apply escape mappings
+    for escaped, replacement in escape_mappings.items():
+        content = content.replace(escaped, replacement)
+    
+    # Handle any remaining HTML numeric entities (e.g., &amp;#123; or &#x27;)
+    import html
+    try:
+        # First decode any HTML entities
+        content = html.unescape(content)
+    except Exception as e:
+        # If html.unescape fails, continue with manual cleaning
+        logger.warning(f"HTML unescape failed: {e}")
+    
+    # Manual cleanup for any remaining escaped sequences
+    content = re.sub(r'&amp;#(\d+);', lambda m: chr(int(m.group(1))), content)
+    content = re.sub(r'&amp;#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), content)
+    content = re.sub(r'&#(\d+);', lambda m: chr(int(m.group(1))), content)
+    content = re.sub(r'&#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), content)
+    
     # Replace problematic Unicode characters with ASCII equivalents
     # but preserve markdown structure
     
