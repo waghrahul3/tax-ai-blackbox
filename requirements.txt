@@ -9,6 +9,7 @@ python-dotenv
 PyPDF2
 pymupdf
 unstructured
+pandas
 anthropic
 python-multipart
 structlog

@@ -1,5 +1,5 @@
 import os
-from urllib.parse import quote
+from urllib.parse import quote, unquote_plus
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import FileResponse
@@ -14,6 +14,163 @@ from services.upload_service import generate_request_id, persist_uploads
 from storage.storage_factory import get_storage
 from core.prompt_templates import get_prompt_template, list_prompt_templates
 from utils.logger import get_logger, build_log_extra
+import re
+
+logger = get_logger(__name__)
+
+
+def _clean_unicode_box_characters(content: str) -> str:
+    """
+    Replace Unicode box-drawing characters with ASCII equivalents.
+    This prevents special characters like ══ from appearing in prompts.
+    """
+    # Define mappings of Unicode box characters to ASCII equivalents
+    box_char_mappings = {
+        '═': '=',
+        '─': '-',
+        '│': '|',
+        '┌': '+',
+        '┐': '+', 
+        '└': '+',
+        '┘': '+',
+        '├': '+',
+        '┤': '+',
+        '┬': '+',
+        '┴': '+',
+        '┼': '+',
+        '╔': '+',
+        '╗': '+',
+        '╚': '+',
+        '╝': '+',
+        '╠': '+',
+        '╣': '+',
+        '╦': '+',
+        '╩': '+',
+        '╬': '+',
+        '║': '|',
+        '╞': '+',
+        '╡': '+',
+        '╤': '+',
+        '╥': '+',
+        '╙': '+',
+        '╘': '+',
+        '╒': '+',
+        '╓': '+',
+        '╫': '+',
+        '╪': '+',
+        '┝': '+',
+        '┠': '+',
+        '┣': '+',
+        '┥': '+',
+        '┨': '+',
+        '┫': '+',
+        '┭': '+',
+        '┮': '+',
+        '┯': '+',
+        '┰': '+',
+        '┱': '+',
+        '┲': '+',
+        '┳': '+',
+        '┵': '+',
+        '┶': '+',
+        '┷': '+',
+        '┸': '+',
+        '┹': '+',
+        '┺': '+',
+        '┻': '+',
+        '┽': '+',
+        '┾': '+',
+        '┿': '+',
+        '╀': '+',
+        '╁': '+',
+        '╂': '+',
+        '╃': '+',
+        '╄': '+',
+        '╅': '+',
+        '╆': '+',
+        '╇': '+',
+        '╈': '+',
+        '╉': '+',
+        '╊': '+',
+    }
+    
+    # Create regex pattern for all box characters
+    box_pattern = re.compile(f"[{''.join(box_char_mappings.keys())}]")
+    
+    # Replace each box character with its ASCII equivalent
+    cleaned_content = box_pattern.sub(lambda match: box_char_mappings[match.group()], content)
+    
+    logger.debug(
+        "Cleaned Unicode box characters from prompt",
+        extra={
+            "original_length": len(content),
+            "cleaned_length": len(cleaned_content)
+        }
+    )
+    
+    return cleaned_content
+
+
+def _clean_markdown_formatting(content: str) -> str:
+    """
+    Clean problematic Unicode characters that appear during internet transfer
+    while preserving markdown structure for LLM comprehension.
+    """
+    import re
+    
+    # Replace problematic Unicode characters with ASCII equivalents
+    # but preserve markdown structure
+    
+    # Replace Unicode box drawing characters with ASCII equivalents
+    unicode_to_ascii = {
+        '═': '=',
+        '─': '-',
+        '│': '|',
+        '┌': '+',
+        '┐': '+', 
+        '└': '+',
+        '┘': '+',
+        '├': '+',
+        '┤': '+',
+        '┬': '+',
+        '┴': '+',
+        '┼': '+',
+        '╔': '+',
+        '╗': '+',
+        '╚': '+',
+        '╝': '+',
+        '╠': '+',
+        '╣': '+',
+        '╦': '+',
+        '╩': '+',
+        '╬': '+',
+        '║': '|',
+        '•': '-',     # bullet points
+        '→': '->',    # arrows
+        '—': '--',    # em dash
+        '–': '-',     # en dash
+    }
+    
+    # Create regex pattern for all Unicode characters
+    unicode_pattern = re.compile(f"[{''.join(unicode_to_ascii.keys())}]")
+    
+    # Replace each Unicode character with its ASCII equivalent
+    cleaned_content = unicode_pattern.sub(lambda match: unicode_to_ascii[match.group()], content)
+    
+    # Clean up excessive whitespace but preserve structure
+    cleaned_content = re.sub(r'\n\s*\n', '\n\n', cleaned_content)
+    cleaned_content = cleaned_content.strip()
+    
+    logger.debug(
+        "Cleaned Unicode characters while preserving markdown",
+        extra={
+            "original_length": len(content),
+            "cleaned_length": len(cleaned_content)
+        }
+    )
+    
+    return cleaned_content
+
 
 class ProcessResponse(BaseModel):
 
@@ -106,12 +263,71 @@ async def process_documents(
 
         documents = await load_documents(saved_files, storage)
 
-        pipeline_result = await pipeline.run(
-            documents,
-            user_instruction=prompt,
-            template_name=template_name,
-            template_config=template_config
+        decoded_prompt = unquote_plus(prompt)
+        unicode_cleaned_prompt = _clean_unicode_box_characters(decoded_prompt)
+        final_prompt = _clean_markdown_formatting(unicode_cleaned_prompt)
+
+        logger.info(
+            "Processed prompt",
+            extra={
+                "original_length": len(prompt),
+                "decoded_length": len(decoded_prompt),
+                "unicode_cleaned_length": len(unicode_cleaned_prompt),
+                "final_length": len(final_prompt)
+            }
         )
+
+        try:
+            pipeline_result = await pipeline.run(
+                documents,
+                user_instruction=final_prompt,
+                template_name=template_name,
+                template_config=template_config
+            )
+        except Exception as e:
+            # Handle Anthropic API errors gracefully
+            error_message = str(e)
+            if "529" in error_message or "overloaded_error" in error_message:
+                logger.error(
+                    "Anthropic API overloaded - retry later",
+                    extra={"error": error_message, "request_id": request_id}
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "AI service temporarily unavailable",
+                        "message": "The AI service is currently overloaded. Please try again in a few moments.",
+                        "request_id": request_id,
+                        "retry_after": 30
+                    }
+                )
+            elif "429" in error_message or "rate_limit" in error_message:
+                logger.error(
+                    "Anthropic API rate limit exceeded",
+                    extra={"error": error_message, "request_id": request_id}
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "Rate limit exceeded",
+                        "message": "Too many requests. Please wait before trying again.",
+                        "request_id": request_id,
+                        "retry_after": 60
+                    }
+                )
+            else:
+                logger.error(
+                    "Pipeline execution failed",
+                    extra={"error": error_message, "request_id": request_id}
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Processing failed",
+                        "message": "An error occurred during document processing.",
+                        "request_id": request_id
+                    }
+                )
 
         base64_chunks = pipeline_result.get("base64_chunks") if isinstance(pipeline_result, dict) else None
         summary_text = pipeline_result.get("summary") if isinstance(pipeline_result, dict) else pipeline_result

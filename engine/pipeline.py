@@ -10,6 +10,7 @@ from engine.map_worker import summarize_chunks
 from engine.reduce_worker import reduce_summaries
 from utils.logger import get_logger
 from utils.pandas_cleaner import normalize_tabular_text
+from utils.t4_extractor import extract_structured_slip, format_structured_text
 
 
 class DocumentPipeline:
@@ -41,6 +42,9 @@ class DocumentPipeline:
 
         if ENABLE_PANDAS_CLEANING and text_docs:
             self._normalize_text_documents(text_docs)
+
+        if not ENABLE_BASE64_INPUT and text_docs:
+            self._augment_pdf_documents(text_docs)
 
         self.logger.info(
             "Processing documents",
@@ -136,3 +140,32 @@ class DocumentPipeline:
             )
 
             doc.text_content = cleaned_text
+
+    def _augment_pdf_documents(self, documents):
+
+        for doc in documents:
+            media_type = (doc.source_media_type or "").lower()
+            if media_type != "application/pdf" or not doc.source_path:
+                continue
+
+            doc_type, extraction = extract_structured_slip(doc.source_path)
+            if not doc_type or not extraction:
+                continue
+
+            formatted = format_structured_text(doc_type, extraction)
+            enrichment = (
+                f"\n\n[{doc_type} Structured Extraction]\n"
+                f"{formatted}\n"
+            )
+            base_text = doc.text_content or ""
+            doc.text_content = f"{base_text}{enrichment}" if base_text else enrichment
+
+            self.logger.info(
+                "Structured slip extractor enriched PDF document",
+                extra={
+                    "file_name": doc.filename,
+                    "source_path": doc.source_path,
+                    "enrichment_length": len(enrichment),
+                    "doc_type": doc_type
+                }
+            )
