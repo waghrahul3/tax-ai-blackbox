@@ -91,6 +91,58 @@ Logs and `output/` are git-ignored by default via `.gitignore`.
 - **Download link 404** – the `/ai/download` endpoint only allows files inside the `output/` folder; verify the run hasn’t been manually deleted.
 - **Structured logs not appearing** – set `LOG_LEVEL=DEBUG` and `DEBUG_LOG_DIR=logs` (or similar) to emit JSON logs via structlog. Files rotate automatically with date-stamped filenames (`app-debug-YYYYMMDD.log`) controlled by `LOG_FILE_MAX_BYTES` and `LOG_FILE_BACKUP_COUNT`.
 
+## Configuration Options
+
+The application supports several environment variables to control behavior:
+
+### Core Settings
+- `ANTHROPIC_API_KEY` - Required API key for Anthropic Claude
+- `ANTHROPIC_MODEL` - Model to use (default: `claude-opus-4-6`)
+- `LLM_TEMPERATURE` - LLM temperature (default: `0.0`)
+
+### Feature Toggles
+- `ENABLE_PANDAS_CLEANING` - Enable pandas-based table cleaning (default: `false`)
+- `ENABLE_CHUNKING` - Enable text chunking for large documents (default: `true`)
+- `ENABLE_BASE64_INPUT` - Feed files directly to LLM as base64 attachments (default: `false`)
+- `ENABLE_LLM_SUMMARIZATION` - Enable LLM calls for final reduction phase (default: `true`)
+- `ENABLE_LLM_MAP_SUMMARIZATION` - Enable LLM calls for document summarization phase (default: `true`)
+
+### Advanced LLM Control
+For granular control over LLM usage, you can separate map and reduce phases:
+
+**Map Phase Summarization (`ENABLE_LLM_MAP_SUMMARIZATION`):**
+- **Enabled (default)**: Documents are summarized by LLM before final processing
+- **Disabled**: Raw extracted document content is passed to reduction phase
+- **Use case**: Save costs by skipping document summarization while keeping final prompt processing
+
+**Reduce Phase Processing (`ENABLE_LLM_SUMMARIZATION`):**
+- **Enabled (default)**: Final LLM call applies user prompt to processed data
+- **Disabled**: Raw data returned without any prompt processing
+- **Use case**: Get raw extracted data without AI transformation
+
+**Recommended Configuration for Cost Savings:**
+```bash
+# Skip document summarization but keep final prompt processing
+ENABLE_LLM_MAP_SUMMARIZATION=false
+ENABLE_LLM_SUMMARIZATION=true
+```
+
+**Recommended Configuration for Raw Data Only:**
+```bash
+# Skip all LLM processing - get raw extracted data
+ENABLE_LLM_MAP_SUMMARIZATION=false
+ENABLE_LLM_SUMMARIZATION=false
+```
+
+Example usage:
+```bash
+# Disable LLM summarization for cost savings
+ENABLE_LLM_SUMMARIZATION=false python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Enable all features including LLM summarization
+ENABLE_LLM_SUMMARIZATION=true python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
 ## License
 
 Internal project. Add licensing details here if distributing more broadly.

@@ -46,6 +46,83 @@ def _sanitize_csv_content(content: str) -> str:
     return text
 
 
+def _extract_csv_blocks(content: str) -> list:
+    """Extract multiple CSV blocks with their section names."""
+    csv_blocks = []
+    
+    # Pattern to match CSV blocks with CSV Output X: filename.csv format
+    section_pattern = r"##\s*CSV\s+Output\s+\d+:\s*([^\n\.]+\.csv).*?```csv\s*\n(.*?)\n```"
+    matches = re.finditer(section_pattern, content, re.DOTALL | re.IGNORECASE)
+    
+    for match in matches:
+        filename = match.group(1).strip()
+        csv_content = match.group(2).strip()
+        
+        # Clean filename for use in output filename
+        clean_name = filename.replace('.csv', '')
+        clean_name = re.sub(r"[^\w\s-]", "", clean_name)
+        clean_name = re.sub(r"\s+", "_", clean_name)
+        
+        csv_blocks.append({
+            "name": clean_name,
+            "content": csv_content,
+            "original_section": filename
+        })
+    
+    # If no CSV Output pattern found, try FILE X pattern
+    if not csv_blocks:
+        section_pattern = r"##\s*FILE\s+\d+:\s*([^\n\.]+\.csv).*?```csv\s*\n(.*?)\n```"
+        matches = re.finditer(section_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for match in matches:
+            filename = match.group(1).strip()
+            csv_content = match.group(2).strip()
+            
+            # Clean filename for use in output filename
+            clean_name = filename.replace('.csv', '')
+            clean_name = re.sub(r"[^\w\s-]", "", clean_name)
+            clean_name = re.sub(r"\s+", "_", clean_name)
+            
+            csv_blocks.append({
+                "name": clean_name,
+                "content": csv_content,
+                "original_section": filename
+            })
+    
+    # If no FILE X pattern found, try SECTION X pattern
+    if not csv_blocks:
+        section_pattern = r"SECTION\s+\d+\s*[—-]\s*([^\n]+).*?```csv\s*\n(.*?)\n```"
+        matches = re.finditer(section_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for match in matches:
+            section_name = match.group(1).strip()
+            csv_content = match.group(2).strip()
+            
+            # Clean section name for filename
+            clean_name = re.sub(r"[^\w\s-]", "", section_name)
+            clean_name = re.sub(r"\s+", "_", clean_name)
+            
+            csv_blocks.append({
+                "name": clean_name,
+                "content": csv_content,
+                "original_section": section_name
+            })
+    
+    # If no named sections found, fall back to simple CSV blocks
+    if not csv_blocks:
+        simple_pattern = r"```csv\s*\n(.*?)\n```"
+        matches = re.finditer(simple_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for i, match in enumerate(matches):
+            csv_blocks.append({
+                "name": f"csv_output_{i+1}",
+                "content": match.group(1).strip(),
+                "original_section": f"CSV Output {i+1}"
+            })
+    
+    return csv_blocks
+
+
 def _extract_csv_block(content: str) -> str:
 
     match = re.search(r"```csv\s*\n(.*?)\n```", content, re.DOTALL | re.IGNORECASE)
@@ -53,6 +130,19 @@ def _extract_csv_block(content: str) -> str:
         return ""
 
     return match.group(1).strip()
+
+
+def _remove_all_csv_blocks(content: str) -> str:
+    """Remove all CSV blocks from content."""
+    # Remove CSV Output X patterns with CSV blocks
+    cleaned = re.sub(r"##\s*CSV\s+Output\s+\d+:\s*[^\n\.]+\.csv.*?```csv\s*\n.*?\n```", "", content, flags=re.DOTALL | re.IGNORECASE)
+    # Remove FILE X patterns with CSV blocks
+    cleaned = re.sub(r"##\s*FILE\s+\d+:\s*[^\n\.]+\.csv.*?```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    # Remove SECTION X patterns with CSV blocks
+    cleaned = re.sub(r"SECTION\s+\d+\s*[—-][^\n]*.*?```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    # Remove simple CSV blocks
+    cleaned = re.sub(r"```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
 
 
 def _remove_csv_block(content: str) -> str:
@@ -134,21 +224,40 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
             }
         )
     elif format_type == "markdown":
-        csv_block = _extract_csv_block(content)
-        if csv_block:
-            content_to_write = _remove_csv_block(content)
-
+        content_to_write = content  # Initialize with original content
+        csv_blocks = _extract_csv_blocks(content)
+        if csv_blocks:
+            # Remove all CSV blocks from main content
+            content_to_write = _remove_all_csv_blocks(content)
+            
             base_name, _ = os.path.splitext(filename)
-            csv_filename = f"{base_name}.csv"
-            csv_file_path = os.path.join(output_folder, csv_filename)
-
-            with open(csv_file_path, "w", encoding="utf-8") as csv_file:
-                csv_file.write(_sanitize_csv_content(csv_block))
-
-            logger.info(
-                "Generated separated CSV output",
-                extra={"csv_path": csv_file_path}
-            )
+            generated_csv_files = []
+            
+            for csv_block in csv_blocks:
+                csv_filename = f"{base_name}_{csv_block['name']}.csv"
+                csv_file_path = os.path.join(output_folder, csv_filename)
+                
+                with open(csv_file_path, "w", encoding="utf-8") as csv_file:
+                    csv_file.write(_sanitize_csv_content(csv_block['content']))
+                
+                generated_csv_files.append(csv_file_path)
+                
+                logger.info(
+                    "Generated named CSV output",
+                    extra={
+                        "csv_path": csv_file_path,
+                        "section_name": csv_block['original_section'],
+                        "csv_name": csv_block['name']
+                    }
+                )
+            
+            # Update the main content to reference the generated CSV files
+            if generated_csv_files:
+                csv_references = "\n\n**Generated CSV Files:**\n"
+                for i, csv_path in enumerate(generated_csv_files):
+                    csv_filename = os.path.basename(csv_path)
+                    csv_references += f"- {csv_blocks[i]['original_section']}: `{csv_filename}`\n"
+                content_to_write += csv_references
 
     if base64_chunks:
         base64_filename = "base64_chunks.json"
