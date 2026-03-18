@@ -337,6 +337,40 @@ async def process_documents(
             }
         )
 
+        # Log detailed input data for debugging
+        logger.info(
+            "Request input data details",
+            extra={
+                "request_id": request_id,
+                "ctid": ctid,
+                "template_name": template_name,
+                "file_count": len(files),
+                "upload_dir": upload_dir,
+                "prompt_raw": prompt,
+                "prompt_decoded": decoded_prompt,
+                "prompt_final": final_prompt,
+                "system_prompt_raw": system_prompt,
+                "system_prompt_decoded": decoded_system_prompt if system_prompt else None,
+                "system_prompt_final": final_system_prompt,
+                "encoding_info": {
+                    "prompt_encoded_chars": sum(1 for c in prompt if ord(c) > 127),
+                    "system_prompt_encoded_chars": sum(1 for c in system_prompt if ord(c) > 127) if system_prompt else 0,
+                    "prompt_has_unicode_quotes": '"' in prompt or "'" in prompt,
+                    "prompt_has_html_entities": '&' in prompt,
+                    "prompt_has_escaped_newlines": '\\r' in prompt or '\\n' in prompt,
+                    "prompt_has_percent_encoding": '%' in prompt
+                },
+                "file_details": [
+                    {
+                        "filename": file.filename,
+                        "content_type": file.content_type,
+                        "size": file.size if hasattr(file, 'size') else "unknown"
+                    }
+                    for file in files
+                ]
+            }
+        )
+
         try:
             pipeline_result = await pipeline.run(
                 documents,
