@@ -66,10 +66,11 @@ async def reduce_summaries(summaries, llm, user_instruction, template_name=None,
                 extra={"text_content_length": len(text_content)}
             )
         
-        message_content.append({
+        # Create initial content object with text
+        content_object = {
             "type": "text",
             "text": text_content
-        })
+        }
         
         # Add base64 file attachments if available
         if base64_collector and len(base64_collector) > 0:
@@ -78,15 +79,20 @@ async def reduce_summaries(summaries, llm, user_instruction, template_name=None,
                 extra={"file_count": len(base64_collector)}
             )
             
+            # Add files as a list to content object
+            content_object["file_attachments"] = []
             for file_data in base64_collector:
                 if file_data.get("type") == "file":
-                    message_content.append({
-                        "type": "file",
-                        "mime_type": file_data.get("media_type", "application/octet-stream"),
-                        "base64": file_data.get("content", "")
+                    content_object["file_attachments"].append({
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": file_data.get("media_type", "application/octet-stream"),
+                            "data": file_data.get("content", "")
+                        }
                     })
                 elif file_data.get("type") == "image":
-                    message_content.append({
+                    content_object["file_attachments"].append({
                         "type": "image",
                         "source": {
                             "type": "base64",
@@ -94,6 +100,9 @@ async def reduce_summaries(summaries, llm, user_instruction, template_name=None,
                             "data": file_data.get("content", "")
                         }
                     })
+        
+        # Convert content object to message content
+        message_content = content_object
         
         if template_name:
             template_config = get_prompt_template(template_name)
