@@ -236,7 +236,7 @@ def _create_output_zip(output_folder: str) -> str:
     return zip_path
 
 
-def generate_output_file(content, template_config=None, base64_chunks=None):
+def generate_output_file(content: str, template_config=None, base64_chunks=None):
 
     logger.debug(
         "Starting output file generation",
@@ -246,6 +246,19 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
         }
     )
 
+    # Extract status information if present
+    from utils.output_detector import _extract_status_info
+    cleaned_content, status_info = _extract_status_info(content)
+    
+    if status_info:
+        logger.info(
+            "Status information extracted",
+            extra={"status": status_info, "original_length": len(content), "cleaned_length": len(cleaned_content)}
+        )
+    
+    # Use cleaned content for format detection and processing
+    content_to_process = cleaned_content
+
     if template_config and template_config.primary_step.output_format:
         format_type = template_config.primary_step.output_format
         logger.info(
@@ -253,7 +266,7 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
             extra={"format": format_type, "template": template_config.name}
         )
     else:
-        format_type = OutputDetector.detect_format(content)
+        format_type = OutputDetector.detect_format(content_to_process)
         logger.info(
             "Auto-detected output format",
             extra={"format": format_type}
@@ -278,26 +291,26 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
 
     path = os.path.join(output_folder, filename)
 
-    logger.debug("Writing output file", extra={"path": path, "size": len(content)})
+    logger.debug("Writing output file", extra={"path": path, "size": len(content_to_process)})
 
-    content_to_write = content
+    content_to_write = content_to_process
     csv_file_path = None
     base64_file_path = None
     if format_type == "csv":
-        content_to_write = _sanitize_csv_content(content)
+        content_to_write = _sanitize_csv_content(content_to_process)
         logger.debug(
             "Sanitized CSV content",
             extra={
-                "original_size": len(content),
+                "original_size": len(content_to_process),
                 "sanitized_size": len(content_to_write)
             }
         )
     elif format_type == "markdown":
-        content_to_write = content  # Initialize with original content
-        csv_blocks = _extract_csv_blocks(content)
+        content_to_write = content_to_process  # Initialize with cleaned content
+        csv_blocks = _extract_csv_blocks(content_to_process)
         if csv_blocks:
             # Remove all CSV blocks from main content
-            content_to_write = _remove_all_csv_blocks(content)
+            content_to_write = _remove_all_csv_blocks(content_to_process)
             
             base_name, _ = os.path.splitext(filename)
             generated_csv_files = []
@@ -356,13 +369,26 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
     with open(path, "w", encoding="utf-8") as f:
         f.write(content_to_write)
 
+    # Save status information if present
+    status_file_path = None
+    if status_info:
+        status_file_path = os.path.join(output_folder, "status.txt")
+        with open(status_file_path, "w", encoding="utf-8") as f:
+            f.write(f"Status: {status_info}\n")
+            f.write(f"Generated: {datetime.utcnow().isoformat()}\n")
+        logger.info(
+            "Status file created",
+            extra={"status_file_path": status_file_path, "status": status_info}
+        )
+
     logger.info(
         "Output file generated successfully",
         extra={
             "path": path,
             "format": format_type,
             "folder": output_folder,
-            "file_name": filename
+            "file_name": filename,
+            "status_saved": status_info is not None
         }
     )
 
@@ -374,5 +400,7 @@ def generate_output_file(content, template_config=None, base64_chunks=None):
         "folder_path": output_folder,
         "csv_file_path": csv_file_path,
         "zip_file_path": zip_file_path,
-        "base64_file_path": base64_file_path
+        "base64_file_path": base64_file_path,
+        "status_file_path": status_file_path,
+        "status_info": status_info
     }
