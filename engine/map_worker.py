@@ -1,10 +1,9 @@
 import asyncio
 import base64
 
-from langchain.messages import HumanMessage
 from utils.logger import get_logger
 from utils.image_handler import encode_image_for_claude
-from core.config import ENABLE_LLM_MAP_SUMMARIZATION
+from core.config import ENABLE_LLM_MAP_SUMMARIZATION, ANTHROPIC_MODEL
 
 logger = get_logger(__name__)
 
@@ -61,7 +60,7 @@ async def summarize_chunks(
                     extra={"chunk_index": idx, "chunk_length": len(chunk)}
                 )
 
-                message = _build_text_chunk_message(
+                message_content = _build_text_chunk_message(
                     chunk,
                     idx,
                     use_base64,
@@ -77,8 +76,20 @@ async def summarize_chunks(
                     }
                 )
 
-                response = await llm.ainvoke([message])
-                text_summary = _coerce_response_text(response)
+                response = await llm.messages.create(
+                    model=ANTHROPIC_MODEL,
+                    max_tokens=64000,
+                    messages=[{"role": "user", "content": message_content}],
+                    stream=True
+                )
+                
+                # Collect streamed response
+                text_summary = ""
+                async for chunk in response:
+                    if chunk.type == "content_block_delta" and hasattr(chunk.delta, "text"):
+                        text_summary += chunk.delta.text
+                    elif chunk.type == "content_block_stop":
+                        break
                 summaries.append(text_summary)
 
         for idx, image_doc in enumerate(image_docs):
@@ -88,10 +99,22 @@ async def summarize_chunks(
                 extra={"image_index": idx, "file_name": image_doc.filename}
             )
 
-            message = _build_image_message(image_doc)
+            message_content = _build_image_message(image_doc)
 
-            response = await llm.ainvoke([message])
-            text_summary = _coerce_response_text(response)
+            response = await llm.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=64000,
+                messages=[{"role": "user", "content": message_content}],
+                stream=True
+            )
+            
+            # Collect streamed response
+            text_summary = ""
+            async for chunk in response:
+                if chunk.type == "content_block_delta" and hasattr(chunk.delta, "text"):
+                    text_summary += chunk.delta.text
+                elif chunk.type == "content_block_stop":
+                    break
             summaries.append(text_summary)
 
     else:
@@ -204,51 +227,6 @@ async def summarize_chunks(
     return summaries
 
 
-def _coerce_response_text(response) -> str:
-
-    content = getattr(response, "content", "")
-
-    if isinstance(content, str):
-        return content
-
-    blocks = []
-
-    if isinstance(content, list):
-        for block in content:
-            text = _extract_text_from_block(block)
-            if text:
-                blocks.append(text)
-    else:
-        text = _extract_text_from_block(content)
-        if text:
-            blocks.append(text)
-
-    if not blocks:
-        return str(content)
-
-    return "\n".join(blocks)
-
-
-def _extract_text_from_block(block) -> str:
-
-    if not block:
-        return ""
-
-    if isinstance(block, str):
-        return block
-
-    if isinstance(block, dict):
-        if block.get("type") == "text" and block.get("text"):
-            return block["text"]
-        return block.get("text", "")
-
-    text_attr = getattr(block, "text", None)
-    if isinstance(text_attr, str):
-        return text_attr
-
-    return ""
-
-
 def _build_text_chunk_message(chunk: str, idx: int, use_base64: bool, base64_collector):
 
     chunk = chunk or ""
@@ -263,30 +241,26 @@ def _build_text_chunk_message(chunk: str, idx: int, use_base64: bool, base64_col
                     "original_length": len(chunk)
                 }
             )
-        return HumanMessage(
-            content=[
-                {
-                    "type": "text",
-                    "text": (
-                        "The following string is a base64-encoded UTF-8 document chunk. "
-                        "Decode it and produce a detailed summary with key facts, tables, and figures preserved."
-                    )
-                },
-                {
-                    "type": "text",
-                    "text": encoded_chunk
-                }
-            ]
-        )
-
-    return HumanMessage(
-        content=[
+        return [
             {
                 "type": "text",
-                "text": f"Summarize this document chunk:\n\n{chunk}"
+                "text": (
+                    "The following string is a base64-encoded UTF-8 document chunk. "
+                    "Decode it and produce a detailed summary with key facts, tables, and figures preserved."
+                )
+            },
+            {
+                "type": "text",
+                "text": encoded_chunk
             }
         ]
-    )
+
+    return [
+        {
+            "type": "text",
+            "text": f"Summarize this document chunk:\n\n{chunk}"
+        }
+    ]
 
 
 async def _summarize_file_documents(file_docs, llm, base64_collector):
@@ -312,9 +286,9 @@ async def _summarize_file_documents(file_docs, llm, base64_collector):
 
         if ENABLE_LLM_MAP_SUMMARIZATION:
             # LLM-enabled path
-            message, encoded_payload = await _build_file_message(doc)
+            message_content, encoded_payload = await _build_file_message(doc)
 
-            if message is None:
+            if message_content is None:
                 continue
 
             logger.debug(
@@ -322,8 +296,20 @@ async def _summarize_file_documents(file_docs, llm, base64_collector):
                 extra={"file_name": doc.filename, "source_path": doc.source_path}
             )
 
-            response = await llm.ainvoke([message])
-            text_summary = _coerce_response_text(response)
+            response = await llm.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=64000,
+                messages=[{"role": "user", "content": message_content}],
+                stream=True
+            )
+            
+            # Collect streamed response
+            text_summary = ""
+            async for chunk in response:
+                if chunk.type == "content_block_delta" and hasattr(chunk.delta, "text"):
+                    text_summary += chunk.delta.text
+                elif chunk.type == "content_block_stop":
+                    break
             summaries.append(text_summary)
 
             if base64_collector is not None and encoded_payload is not None:
@@ -401,55 +387,55 @@ async def _build_file_message(doc):
     media_type = (doc.source_media_type or "application/octet-stream").lower()
 
     if media_type == "application/pdf":
-        message = HumanMessage(
-            content=[
-                {
-                    "type": "text",
-                    "text": (
-                        "Summarize the attached document. Extract key facts, amounts, and tables in detail."
-                    )
-                },
-                {
-                    "type": "file",
-                    "mime_type": media_type,
-                    "base64": encoded_file
-                }
-            ]
-        )
-        return message, encoded_file
-
-    if media_type.startswith("image/"):
-        message = HumanMessage(
-            content=[
-                {
-                    "type": "text",
-                    "text": (
-                        "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
-                    )
-                },
-                {
-                    "type": "image",
-                    "base64": encoded_file,
-                    "mime_type": media_type
-                }
-            ]
-        )
-        return message, encoded_file
-
-    text_content = (getattr(doc, "text_content", None) or "").strip()
-    message = HumanMessage(
-        content=[
+        content = [
             {
                 "type": "text",
                 "text": (
-                    "Summarize this document. Extract key facts, amounts, and tables in detail.\n\n"
-                    f"{text_content}"
+                    "Summarize the attached document. Extract key facts, amounts, and tables in detail."
                 )
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": encoded_file
+                }
             }
         ]
-    )
+        return content, encoded_file
 
-    return message, encoded_file
+    if media_type.startswith("image/"):
+        content = [
+            {
+                "type": "text",
+                "text": (
+                    "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
+                )
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": encoded_file
+                }
+            }
+        ]
+        return content, encoded_file
+
+    text_content = (getattr(doc, "text_content", None) or "").strip()
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "Summarize this document. Extract key facts, amounts, and tables in detail.\n\n"
+                f"{text_content}"
+            )
+        }
+    ]
+
+    return content, encoded_file
 
 
 def _encode_file_from_path(path: str) -> str:
@@ -466,18 +452,19 @@ def _build_image_message(image_doc):
         image_doc.image_media_type
     )
 
-    return HumanMessage(
-        content=[
-            {
-                "type": "text",
-                "text": (
-                    "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
-                )
-            },
-            {
-                "type": "image",
-                "base64": encoded_image,
-                "mime_type": media_type
+    return [
+        {
+            "type": "text",
+            "text": (
+                "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
+            )
+        },
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": encoded_image
             }
-        ]
-    )
+        }
+    ]

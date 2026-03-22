@@ -29,7 +29,7 @@ def _get_bool_env(var_name: str, default: bool) -> bool:
 
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 DEFAULT_TEMPERATURE = _get_float_env("LLM_TEMPERATURE", 0.0)
 APP_VERSION = os.getenv("APP_VERSION", "0.0.0")
 ENABLE_PANDAS_CLEANING = _get_bool_env("ENABLE_PANDAS_CLEANING", False)

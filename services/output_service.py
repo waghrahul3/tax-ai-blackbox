@@ -31,6 +31,40 @@ def _create_run_folder():
     return folder_path
 
 
+def _convert_markdown_to_csv(markdown_content: str) -> str:
+    """
+    Convert markdown content to CSV format
+    """
+    # Remove markdown code blocks
+    lines = []
+    for line in markdown_content.split('\n'):
+        if line.strip().startswith('```'):
+            continue
+        # Escape commas and quotes for CSV
+        clean_line = line.replace('"', '""').replace(',', '","')
+        lines.append(clean_line)
+    
+    return '\n'.join(lines)
+
+def _convert_csv_to_markdown(csv_content: str) -> str:
+    """
+    Convert CSV content to markdown format
+    """
+    lines = csv_content.split('\n')
+    markdown_lines = []
+    
+    for line in lines:
+        if line.strip():
+            # Escape pipe characters and format as markdown table row
+            clean_line = line.replace('"', '""').replace(',', '\\,')
+            markdown_lines.append(f"| {clean_line} |")
+    
+    if markdown_lines:
+        markdown_lines.insert(0, "| Field 1 | Field 2 | Field 3 |")
+        markdown_lines.append("|---|---|---|")
+    
+    return '\n'.join(markdown_lines)
+
 def _sanitize_csv_content(content: str) -> str:
 
     text = content.strip()
@@ -289,8 +323,8 @@ def generate_output_file(content: str, template_config=None, base64_chunks=None)
 
     output_folder = _create_run_folder()
 
+    # Generate primary output file
     path = os.path.join(output_folder, filename)
-
     logger.debug("Writing output file", extra={"path": path, "size": len(content_to_process)})
 
     content_to_write = content_to_process
@@ -311,11 +345,10 @@ def generate_output_file(content: str, template_config=None, base64_chunks=None)
         if csv_blocks:
             # Remove all CSV blocks from main content
             content_to_write = _remove_all_csv_blocks(content_to_process)
-            
             base_name, _ = os.path.splitext(filename)
             generated_csv_files = []
             
-            for csv_block in csv_blocks:
+            for i, csv_block in enumerate(csv_blocks):
                 csv_filename = f"{base_name}_{csv_block['name']}.csv"
                 csv_file_path = os.path.join(output_folder, csv_filename)
                 
