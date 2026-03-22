@@ -3,9 +3,22 @@ import base64
 
 from utils.logger import get_logger
 from utils.image_handler import encode_image_for_claude
-from core.config import ENABLE_LLM_MAP_SUMMARIZATION, ANTHROPIC_MODEL
+from core.config import ENABLE_LLM_MAP_SUMMARIZATION, ANTHROPIC_MODEL, MAX_TOKENS, ENABLE_PDF_BETA
 
 logger = get_logger(__name__)
+
+
+def _has_pdf_documents(file_docs=None, image_docs=None):
+    """Check if any documents are PDFs to determine if beta headers are needed."""
+    if file_docs:
+        for doc in file_docs:
+            if hasattr(doc, 'source_media_type') and doc.source_media_type == 'application/pdf':
+                return True
+    if image_docs:
+        for doc in image_docs:
+            if hasattr(doc, 'source_media_type') and doc.source_media_type == 'application/pdf':
+                return True
+    return False
 
 
 async def summarize_chunks(
@@ -23,12 +36,17 @@ async def summarize_chunks(
     if file_docs is None:
         file_docs = []
 
+    # Check if PDF processing is needed for beta headers
+    has_pdfs = _has_pdf_documents(file_docs, image_docs)
+    
     logger.info(
         "Starting content summarization",
         extra={
             "text_chunks": len(chunks), 
             "images": len(image_docs),
-            "llm_map_summarization_enabled": ENABLE_LLM_MAP_SUMMARIZATION
+            "llm_map_summarization_enabled": ENABLE_LLM_MAP_SUMMARIZATION,
+            "has_pdf_documents": has_pdfs,
+            "pdf_beta_enabled": ENABLE_PDF_BETA
         }
     )
 
@@ -47,12 +65,18 @@ async def summarize_chunks(
             file_summaries = await _summarize_file_documents(
                 file_docs,
                 llm,
-                base64_collector
+                base64_collector,
+                has_pdfs
             )
             summaries.extend(file_summaries)
 
         else:
-
+            llm_with_beta = llm
+            if has_pdfs and ENABLE_PDF_BETA:
+                # Need to create a new client with beta headers
+                from core.llm_factory import get_llm
+                llm_with_beta = get_llm(include_beta_headers=True)
+        
             for idx, chunk in enumerate(chunks):
 
                 logger.debug(
@@ -76,9 +100,12 @@ async def summarize_chunks(
                     }
                 )
 
-                response = await llm.messages.create(
+                # Use appropriate client based on PDF detection
+                active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+                
+                response = await active_llm.messages.create(
                     model=ANTHROPIC_MODEL,
-                    max_tokens=64000,
+                    max_tokens=MAX_TOKENS,
                     messages=[{"role": "user", "content": message_content}],
                     stream=True
                 )
@@ -101,9 +128,12 @@ async def summarize_chunks(
 
             message_content = _build_image_message(image_doc)
 
-            response = await llm.messages.create(
+            # Use appropriate client based on PDF detection
+            active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+            
+            response = await active_llm.messages.create(
                 model=ANTHROPIC_MODEL,
-                max_tokens=64000,
+                max_tokens=MAX_TOKENS,
                 messages=[{"role": "user", "content": message_content}],
                 stream=True
             )
@@ -263,15 +293,23 @@ def _build_text_chunk_message(chunk: str, idx: int, use_base64: bool, base64_col
     ]
 
 
-async def _summarize_file_documents(file_docs, llm, base64_collector):
+async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=False):
 
     summaries = []
+    
+    # Create beta-enabled client if needed
+    llm_with_beta = llm
+    if has_pdfs and ENABLE_PDF_BETA:
+        from core.llm_factory import get_llm
+        llm_with_beta = get_llm(include_beta_headers=True)
     
     logger.info(
         "Processing file documents",
         extra={
             "file_docs": len(file_docs),
-            "llm_map_summarization_enabled": ENABLE_LLM_MAP_SUMMARIZATION
+            "llm_map_summarization_enabled": ENABLE_LLM_MAP_SUMMARIZATION,
+            "has_pdf_documents": has_pdfs,
+            "pdf_beta_enabled": ENABLE_PDF_BETA
         }
     )
 
@@ -296,9 +334,12 @@ async def _summarize_file_documents(file_docs, llm, base64_collector):
                 extra={"file_name": doc.filename, "source_path": doc.source_path}
             )
 
-            response = await llm.messages.create(
+            # Use appropriate client based on PDF detection
+            active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+            
+            response = await active_llm.messages.create(
                 model=ANTHROPIC_MODEL,
-                max_tokens=64000,
+                max_tokens=MAX_TOKENS,
                 messages=[{"role": "user", "content": message_content}],
                 stream=True
             )

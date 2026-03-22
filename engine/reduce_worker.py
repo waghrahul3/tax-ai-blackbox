@@ -8,10 +8,22 @@ All original logic, flags, and logging are preserved exactly.
 import anthropic
 
 from core.prompt_templates import get_prompt_template
-from core.config import ENABLE_LLM_SUMMARIZATION, ENABLE_BASE64_INPUT, ANTHROPIC_MODEL
+from core.config import ENABLE_LLM_SUMMARIZATION, ENABLE_BASE64_INPUT, ANTHROPIC_MODEL, MAX_TOKENS, ENABLE_PDF_BETA
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _has_pdf_attachments(base64_collector):
+    """Check if any attachments in base64_collector are PDFs."""
+    if not base64_collector:
+        return False
+    
+    for file_data in base64_collector:
+        media_type = file_data.get("media_type") or file_data.get("mime_type", "")
+        if media_type == "application/pdf":
+            return True
+    return False
 
 
 async def reduce_summaries(
@@ -42,6 +54,9 @@ async def reduce_summaries(
     The model's text response as a plain string.
     """
 
+    # Check if PDF processing is needed for beta headers
+    has_pdfs = _has_pdf_attachments(base64_collector)
+
     logger.info(
         "Starting reduce phase",
         extra={
@@ -56,6 +71,8 @@ async def reduce_summaries(
             ),
             "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION,
             "base64_collector_count": len(base64_collector) if base64_collector else 0,
+            "has_pdf_attachments": has_pdfs,
+            "pdf_beta_enabled": ENABLE_PDF_BETA,
             "has_system_prompt": system_prompt is not None,
             "system_prompt_length": len(system_prompt) if system_prompt else 0,
             "system_prompt_preview": (
@@ -86,9 +103,6 @@ async def reduce_summaries(
         if ENABLE_BASE64_INPUT:
             # Include both document summaries AND user instruction in base64 mode
             text_body = (
-                f"You are provided with document summaries and the original file attachments. "
-                f"Use both the summaries for context and the original files for detailed analysis.\n\n"
-                f"Document Summaries:\n{combined}\n\nUser instruction:\n"
                 f"{user_instruction or ''}"
             )
             logger.info(
@@ -145,6 +159,17 @@ async def reduce_summaries(
                         }
                     )
 
+        # ── Resolve max_tokens from template or use global ─────────────────────
+        max_tokens_to_use = MAX_TOKENS
+        if template_name:
+            template_config = get_prompt_template(template_name)
+            if hasattr(template_config.primary_step, 'max_tokens'):
+                max_tokens_to_use = template_config.primary_step.max_tokens
+                logger.info(
+                    "Using template-defined max_tokens",
+                    extra={"max_tokens": max_tokens_to_use, "template": template_name}
+                )
+
         # ── Resolve the system prompt ──────────────────────────────────
         resolved_system: str = ""
 
@@ -187,9 +212,22 @@ async def reduce_summaries(
         # ── Call the Anthropic Messages API ───────────────────────────
         logger.debug("Invoking Anthropic LLM for final reduction")
 
+        # Create beta-enabled client if needed
+        llm_with_beta = llm
+        if has_pdfs and ENABLE_PDF_BETA:
+            from core.llm_factory import get_llm
+            llm_with_beta = get_llm(include_beta_headers=True)
+            logger.info(
+                "Adding PDF beta headers to reduce phase",
+                extra={"pdf_attachments_count": sum(1 for f in base64_collector or [] if (f.get("media_type") or f.get("mime_type", "")) == "application/pdf")}
+            )
+
+        # Use appropriate client based on PDF detection
+        active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+
         create_kwargs: dict = {
             "model": ANTHROPIC_MODEL,
-            "max_tokens": 64000,
+            "max_tokens": max_tokens_to_use,
             "messages": [
                 {
                     "role": "user",
@@ -208,7 +246,7 @@ async def reduce_summaries(
         if resolved_system:
             create_kwargs["system"] = resolved_system
 
-        stream = await llm.messages.create(**create_kwargs)
+        stream = await active_llm.messages.create(**create_kwargs)
 
         # Collect streamed response
         result_text: str = ""
