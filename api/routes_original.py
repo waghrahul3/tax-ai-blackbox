@@ -8,19 +8,217 @@ from structlog.contextvars import bind_contextvars, unbind_contextvars
 from typing import List, Optional
 
 from engine.pipeline import DocumentPipeline
+from services.document_loader import load_documents
+from services.output_service import generate_output_file
 from services.upload_service import generate_request_id, persist_uploads
-from services.service_container import get_service, configure_services
+from storage.storage_factory import get_storage
+from core.prompt_templates import get_prompt_template, list_prompt_templates
 from utils.logger import get_logger, build_log_extra
-from exceptions.document_exceptions import PasswordProtectedPDFException
-
-# Configure services on import
-configure_services()
+import re
 
 logger = get_logger(__name__)
 
 
+def _clean_unicode_box_characters(content: str) -> str:
+    """
+    Replace Unicode box-drawing characters with ASCII equivalents.
+    This prevents special characters like ══ from appearing in prompts.
+    """
+    # Define mappings of Unicode box characters to ASCII equivalents
+    box_char_mappings = {
+        '═': '=',
+        '─': '-',
+        '│': '|',
+        '┌': '+',
+        '┐': '+', 
+        '└': '+',
+        '┘': '+',
+        '├': '+',
+        '┤': '+',
+        '┬': '+',
+        '┴': '+',
+        '┼': '+',
+        '╔': '+',
+        '╗': '+',
+        '╚': '+',
+        '╝': '+',
+        '╠': '+',
+        '╣': '+',
+        '╦': '+',
+        '╩': '+',
+        '╬': '+',
+        '║': '|',
+        '╞': '+',
+        '╡': '+',
+        '╤': '+',
+        '╥': '+',
+        '╙': '+',
+        '╘': '+',
+        '╒': '+',
+        '╓': '+',
+        '╫': '+',
+        '╪': '+',
+        '┝': '+',
+        '┠': '+',
+        '┣': '+',
+        '┥': '+',
+        '┨': '+',
+        '┫': '+',
+        '┭': '+',
+        '┮': '+',
+        '┯': '+',
+        '┰': '+',
+        '┱': '+',
+        '┲': '+',
+        '┳': '+',
+        '┵': '+',
+        '┶': '+',
+        '┷': '+',
+        '┸': '+',
+        '┹': '+',
+        '┺': '+',
+        '┻': '+',
+        '┽': '+',
+        '┾': '+',
+        '┿': '+',
+        '╀': '+',
+        '╁': '+',
+        '╂': '+',
+        '╃': '+',
+        '╄': '+',
+        '╅': '+',
+        '╆': '+',
+        '╇': '+',
+        '╈': '+',
+        '╉': '+',
+        '╊': '+',
+    }
+    
+    # Create regex pattern for all box characters
+    box_pattern = re.compile(f"[{''.join(box_char_mappings.keys())}]")
+    
+    # Replace each box character with its ASCII equivalent
+    cleaned_content = box_pattern.sub(lambda match: box_char_mappings[match.group()], content)
+    
+    logger.debug(
+        "Cleaned Unicode box characters from prompt",
+        extra={
+            "original_length": len(content),
+            "cleaned_length": len(cleaned_content)
+        }
+    )
+    
+    return cleaned_content
+
+
+def _clean_markdown_formatting(content: str) -> str:
+    """
+    Clean problematic Unicode characters that appear during internet transfer
+    while preserving markdown structure for LLM comprehension.
+    """
+    import re
+    
+    # First, handle HTML/JSON escaped characters
+    # Replace escaped newlines and common HTML entities
+    escape_mappings = {
+        '\\r\\n': '\n',
+        '\\r': '\n', 
+        '\\n': '\n',
+        '&amp;amp;': '&',
+        '&amp;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '&quot;': '"',
+        '&#39;': "'",
+        '&apos;': "'",
+        '&amp;#40;': '(',
+        '&amp;#41;': ')',
+        '&#40;': '(',
+        '&#41;': ')',
+        '&amp;#x27;': "'",
+        '&amp;#x2F;': '/',
+        '&#x27;': "'",
+        '&#x2F;': '/',
+    }
+    
+    # Apply escape mappings
+    for escaped, replacement in escape_mappings.items():
+        content = content.replace(escaped, replacement)
+    
+    # Handle any remaining HTML numeric entities (e.g., &amp;#123; or &#x27;)
+    import html
+    try:
+        # First decode any HTML entities
+        content = html.unescape(content)
+    except Exception as e:
+        # If html.unescape fails, continue with manual cleaning
+        logger.warning(f"HTML unescape failed: {e}")
+    
+    # Manual cleanup for any remaining escaped sequences
+    content = re.sub(r'&amp;#(\d+);', lambda m: chr(int(m.group(1))), content)
+    content = re.sub(r'&amp;#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), content)
+    content = re.sub(r'&#(\d+);', lambda m: chr(int(m.group(1))), content)
+    content = re.sub(r'&#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), content)
+    
+    # Replace problematic Unicode characters with ASCII equivalents
+    # but preserve markdown structure
+    
+    # Replace Unicode box drawing characters with ASCII equivalents
+    unicode_to_ascii = {
+        '═': '=',
+        '─': '-',
+        '│': '|',
+        '┌': '+',
+        '┐': '+', 
+        '└': '+',
+        '┘': '+',
+        '├': '+',
+        '┤': '+',
+        '┬': '+',
+        '┴': '+',
+        '┼': '+',
+        '╔': '+',
+        '╗': '+',
+        '╚': '+',
+        '╝': '+',
+        '╠': '+',
+        '╣': '+',
+        '╦': '+',
+        '╩': '+',
+        '╬': '+',
+        '║': '|',
+        '•': '-',     # bullet points
+        '→': '->',    # arrows
+        '—': '--',    # em dash
+        '–': '-',     # en dash
+        '\u201c': '"',  # left double quotation mark (U+201C)
+        '\u201d': '"',  # right double quotation mark (U+201D)
+        '\u2018': "'",  # left single quotation mark (U+2018)
+        '\u2019': "'",  # right single quotation mark (U+2019)
+    }
+    
+    # Create regex pattern for all Unicode characters
+    unicode_pattern = re.compile(f"[{''.join(unicode_to_ascii.keys())}]")
+    
+    # Replace each Unicode character with its ASCII equivalent
+    cleaned_content = unicode_pattern.sub(lambda match: unicode_to_ascii[match.group()], content)
+    
+    # Clean up excessive whitespace but preserve structure
+    cleaned_content = re.sub(r'\n\s*\n', '\n\n', cleaned_content)
+    cleaned_content = cleaned_content.strip()
+    
+    logger.debug(
+        "Cleaned Unicode characters while preserving markdown",
+        extra={
+            "original_length": len(content),
+            "cleaned_length": len(cleaned_content)
+        }
+    )
+    
+    return cleaned_content
+
+
 class ProcessResponse(BaseModel):
-    """Response model for document processing."""
 
     status: str = Field(description="Processing status message")
     format: str = Field(description="Detected output format e.g. markdown, csv")
@@ -40,16 +238,8 @@ class ProcessResponse(BaseModel):
 
 router = APIRouter()
 
-# Initialize services
-document_processing_service = get_service("document_processing")
-content_cleaning_service = get_service("content_cleaning")
-llm_service = get_service("llm")
-output_generation_service = get_service("output_generation")
-file_validation_service = get_service("file_validation")
-template_service = get_service("template")
-
-# Keep pipeline for now (will be refactored later)
 pipeline = DocumentPipeline()
+storage = get_storage()
 logger = get_logger(__name__)
 
 
@@ -83,8 +273,7 @@ async def process_documents(
         description="Optional correlation tracking ID passed through to server logs"
     )
 ):
-    """Process uploaded documents with AI using refactored services."""
-    
+
     unbind_fields = []
     if ctid:
         bind_contextvars(ctid=ctid)
@@ -93,13 +282,12 @@ async def process_documents(
     request_id = generate_request_id()
 
     try:
-        # Validate files first
-        file_validation_service.validate_files(files)
-
-        # Get template configuration if specified
         template_config = None
         if template_name:
-            template_config = template_service.get_template(template_name)
+            try:
+                template_config = get_prompt_template(template_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         logger.info(
             "Processing request",
@@ -112,7 +300,6 @@ async def process_documents(
             )
         )
 
-        # Persist uploads
         saved_files, upload_dir = await persist_uploads(files, request_id)
 
         logger.info(
@@ -125,62 +312,25 @@ async def process_documents(
             )
         )
 
-        # Load documents using new service
-        try:
-            documents = await document_processing_service.load_documents(saved_files)
-        except PasswordProtectedPDFException as e:
-            # Handle password-protected PDF errors with specific HTTP responses
-            filename = getattr(e, 'filename', 'unknown')
-            
-            if e.error_code == "password_required":
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "password_required",
-                        "filename": filename
-                    }
-                )
-            elif e.error_code == "wrong_password":
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "wrong_password",
-                        "filename": filename
-                    }
-                )
-            elif e.error_code == "invalid_pdf":
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "invalid_pdf",
-                        "filename": filename
-                    }
-                )
-            else:
-                # Generic password-protected PDF error
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "pdf_processing_error",
-                        "filename": filename,
-                        "message": str(e)
-                    }
-                )
+        documents = await load_documents(saved_files, storage)
 
-        # Clean prompts using new service
         decoded_prompt = unquote_plus(prompt)
-        final_prompt = content_cleaning_service.clean_prompt_content(decoded_prompt)
+        unicode_cleaned_prompt = _clean_unicode_box_characters(decoded_prompt)
+        final_prompt = _clean_markdown_formatting(unicode_cleaned_prompt)
 
+        # Process system_prompt if provided
         final_system_prompt = None
         if system_prompt:
             decoded_system_prompt = unquote_plus(system_prompt)
-            final_system_prompt = content_cleaning_service.clean_prompt_content(decoded_system_prompt)
+            unicode_cleaned_system_prompt = _clean_unicode_box_characters(decoded_system_prompt)
+            final_system_prompt = _clean_markdown_formatting(unicode_cleaned_system_prompt)
 
         logger.info(
             "Processed prompt",
             extra={
                 "original_length": len(prompt),
                 "decoded_length": len(decoded_prompt),
+                "unicode_cleaned_length": len(unicode_cleaned_prompt),
                 "final_length": len(final_prompt),
                 "system_prompt_provided": system_prompt is not None,
                 "system_prompt_length": len(final_system_prompt) if final_system_prompt else 0
@@ -221,7 +371,6 @@ async def process_documents(
             }
         )
 
-        # Process documents through pipeline (keep existing for now)
         try:
             pipeline_result = await pipeline.run(
                 documents,
@@ -231,10 +380,9 @@ async def process_documents(
                 system_prompt=final_system_prompt
             )
         except Exception as e:
-            # Handle errors with new exception types
+            # Handle Anthropic API errors gracefully
             error_message = str(e)
             if "529" in error_message or "overloaded_error" in error_message:
-                from exceptions.llm_exceptions import LLMAPIOverloadException
                 logger.error(
                     "Anthropic API overloaded - retry later",
                     extra={"error": error_message, "request_id": request_id}
@@ -249,7 +397,6 @@ async def process_documents(
                     }
                 )
             elif "429" in error_message or "rate_limit" in error_message:
-                from exceptions.llm_exceptions import LLMRateLimitException
                 logger.error(
                     "Anthropic API rate limit exceeded",
                     extra={"error": error_message, "request_id": request_id}
@@ -264,7 +411,6 @@ async def process_documents(
                     }
                 )
             else:
-                from exceptions.document_exceptions import DocumentProcessingException
                 logger.error(
                     "Pipeline execution failed",
                     extra={"error": error_message, "request_id": request_id}
@@ -281,13 +427,11 @@ async def process_documents(
         base64_chunks = pipeline_result.get("base64_chunks") if isinstance(pipeline_result, dict) else None
         summary_text = pipeline_result.get("summary") if isinstance(pipeline_result, dict) else pipeline_result
 
-        # Generate output using new service
-        output = output_generation_service.generate_output_file(
+        output = generate_output_file(
             summary_text,
             template_config=template_config,
             base64_chunks=base64_chunks
         )
-        
     finally:
         if unbind_fields:
             unbind_contextvars(*unbind_fields)
@@ -303,7 +447,6 @@ async def process_documents(
         )
     )
 
-    # Generate download URLs
     download_path = request.url_for("download_file").path
     download_url = f"{download_path}?file_path={quote(output['file_path'])}"
     csv_file_path = output.get("csv_file_path")
@@ -312,7 +455,6 @@ async def process_documents(
     zip_download_url = None
     base64_file_path = output.get("base64_file_path")
     base64_download_url = None
-    
     if csv_file_path:
         csv_download_url = f"{download_path}?file_path={quote(csv_file_path)}"
     if zip_file_path:
@@ -341,13 +483,15 @@ async def process_documents(
 
 @router.get("/ai/templates")
 async def list_templates():
-    """List available prompt templates using new service."""
-    
-    templates_result = template_service.list_templates()
-    
-    logger.debug("Listing templates", extra={"count": templates_result["template_count"]})
 
-    return templates_result
+    templates = list_prompt_templates()
+
+    logger.debug("Listing templates", extra={"count": len(templates)})
+
+    return {
+        "status": "success",
+        "templates": templates
+    }
 
 
 @router.get("/ai/download", name="download_file")
@@ -356,8 +500,7 @@ async def download_file(
     file_path: str = Query(..., description="File path returned from /ai/process response"),
     ctid: Optional[str] = Query(None, description="Optional correlation tracking ID passed through to server logs")
 ):
-    """Download output file with security validation."""
-    
+
     unbind_fields = []
     if ctid:
         bind_contextvars(ctid=ctid)

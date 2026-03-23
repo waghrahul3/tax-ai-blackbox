@@ -16,6 +16,9 @@ class DocumentContent:
 
     source_path: Optional[str] = None
     source_media_type: Optional[str] = None
+    
+    # Track if this document was processed with a password
+    password_processed: Optional[bool] = None
 
     def is_text(self) -> bool:
         return self.content_type == "text"
