@@ -16,6 +16,8 @@ from exceptions.output_exceptions import (
     OutputFormatException,
     FileCreationException
 )
+from config.config_manager import get_config_manager
+from strategies.output_format_strategies import OutputFormatStrategyFactory
 
 
 class OutputGenerationService:
@@ -24,6 +26,8 @@ class OutputGenerationService:
     def __init__(self, output_root: str = "output"):
         self.logger = get_logger(__name__)
         self.output_root = output_root
+        self.config_manager = get_config_manager()
+        self.output_strategy_factory = OutputFormatStrategyFactory()
         self._ensure_output_directory()
     
     def _ensure_output_directory(self) -> None:
@@ -243,13 +247,33 @@ class OutputGenerationService:
             ) from e
     
     def _prepare_content_for_format(self, content: str, format_type: str) -> str:
-        """Prepare content based on output format."""
-        if format_type == "csv":
-            return self._sanitize_csv_content(content)
-        elif format_type == "markdown":
-            return self._prepare_markdown_content(content)
-        else:
-            return content
+        """Prepare content based on output format using strategy pattern."""
+        try:
+            strategy = self.output_strategy_factory.get_strategy(format_type)
+            prepared_content = strategy.prepare_content(content)
+            
+            self.logger.debug(
+                "Content prepared with strategy",
+                extra={
+                    "strategy": strategy.__class__.__name__,
+                    "format_type": format_type,
+                    "original_length": len(content),
+                    "prepared_length": len(prepared_content)
+                }
+            )
+            
+            return prepared_content
+            
+        except Exception as e:
+            self.logger.warning(
+                "Strategy-based content preparation failed, using fallback",
+                extra={
+                    "format_type": format_type,
+                    "error": str(e)
+                }
+            )
+            # Fallback to original method
+            return self._fallback_content_preparation(content, format_type)
     
     def _sanitize_csv_content(self, content: str) -> str:
         """Sanitize content for CSV output."""
@@ -421,3 +445,16 @@ class OutputGenerationService:
                 extra={"status_file_path": status_file_path, "error": str(e)}
             )
             return None
+    
+    def _fallback_content_preparation(self, content: str, format_type: str) -> str:
+        """Fallback method for content preparation."""
+        if format_type == "csv":
+            return self._sanitize_csv_content(content)
+        elif format_type == "markdown":
+            return self._prepare_markdown_content(content)
+        else:
+            return content
+    
+    def get_output_strategy_info(self) -> dict:
+        """Get information about available output strategies."""
+        return self.output_strategy_factory.get_strategy_info()

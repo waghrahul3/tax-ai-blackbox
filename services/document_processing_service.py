@@ -10,6 +10,7 @@ from exceptions.document_exceptions import (
     DocumentLoadException
 )
 from config.config_manager import get_config_manager
+from strategies.document_strategies import DocumentStrategyFactory
 
 
 class DocumentProcessingService:
@@ -21,6 +22,7 @@ class DocumentProcessingService:
         self.config_manager = get_config_manager()
         self.api_limits = self.config_manager.api_limits()
         self.max_image_bytes = self.api_limits.get_limit("max_image_bytes")
+        self.strategy_factory = DocumentStrategyFactory()
     
     async def load_documents(self, files: List) -> List[DocumentContent]:
         """
@@ -54,6 +56,9 @@ class DocumentProcessingService:
                     
                     # Load document
                     doc = await self.storage.read_file(file)
+                    
+                    # Apply strategy-based processing
+                    doc = await self.process_document_with_strategy(doc)
                     
                     # Check for oversized images
                     self._validate_image_size(doc)
@@ -213,3 +218,44 @@ class DocumentProcessingService:
             "total_image_bytes": total_image_bytes,
             "file_types": list(set(d.content_type for d in documents))
         }
+    
+    async def process_document_with_strategy(self, document: DocumentContent) -> DocumentContent:
+        """
+        Process a document using the appropriate strategy.
+        
+        Args:
+            document: Document to process
+            
+        Returns:
+            Processed document
+        """
+        try:
+            strategy = self.strategy_factory.get_strategy(document)
+            processed_doc = await strategy.process(document)
+            
+            self.logger.debug(
+                "Document processed with strategy",
+                extra={
+                    "strategy": strategy.__class__.__name__,
+                    "filename": document.filename,
+                    "content_type": document.content_type
+                }
+            )
+            
+            return processed_doc
+            
+        except Exception as e:
+            self.logger.error(
+                "Strategy-based document processing failed",
+                extra={
+                    "filename": document.filename,
+                    "content_type": document.content_type,
+                    "error": str(e)
+                }
+            )
+            # Fall back to original document if strategy fails
+            return document
+    
+    def get_strategy_info(self) -> dict:
+        """Get information about available document strategies."""
+        return self.strategy_factory.get_strategy_info()
