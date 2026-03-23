@@ -7,6 +7,7 @@ from utils.logger import get_logger
 from utils.pdf_extractor import extract_text_from_pdf
 from utils.image_handler import is_image_file, get_image_media_type
 from models.document import DocumentContent
+from services.document_loader import MAX_IMAGE_BYTES
 
 
 def _looks_like_pdf(file, data: bytes) -> bool:
@@ -56,11 +57,34 @@ class LocalStorage:
                 "Falling back to binary image ingestion; no text extracted",
                 extra={"file_name": filename}
             )
+            # Check if image needs compression before storing
+            compressed_image_data = data
+            image_media_type = media_type or "image/jpeg"
+            
+            if len(data) > MAX_IMAGE_BYTES:
+                self.logger.info(
+                    "Compressing image in document loader",
+                    extra={"file_name": filename, "original_size": len(data)}
+                )
+                try:
+                    from utils.image_handler import compress_image_to_limit
+                    compressed_image_data, _ = compress_image_to_limit(data)
+                    self.logger.info(
+                        "Image compressed in document loader",
+                        extra={"file_name": filename, "compressed_size": len(compressed_image_data)}
+                    )
+                    compressed_image_data = compressed_image_data
+                except Exception as e:
+                    self.logger.error(
+                        "Failed to compress image in document loader",
+                        extra={"file_name": filename, "error": str(e)}
+                    )
+            
             return DocumentContent(
                 content_type="image",
                 filename=filename,
-                image_data=data,
-                image_media_type=media_type,
+                image_data=compressed_image_data,  # ✅ Use compressed data
+                image_media_type=image_media_type,
                 source_path=source_path,
                 source_media_type=media_type or content_type
             )

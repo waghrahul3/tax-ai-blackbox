@@ -39,6 +39,12 @@ async def summarize_chunks(
     # Check if PDF processing is needed for beta headers
     has_pdfs = _has_pdf_documents(file_docs, image_docs)
     
+    # Define llm_with_beta at function level to ensure it's available everywhere
+    llm_with_beta = llm
+    if has_pdfs and ENABLE_PDF_BETA:
+        from core.llm_factory import get_llm
+        llm_with_beta = get_llm(include_beta_headers=True)
+
     logger.info(
         "Starting content summarization",
         extra={
@@ -52,17 +58,10 @@ async def summarize_chunks(
 
     summaries = []
 
-    # Define llm_with_beta at function level to ensure it's available everywhere
-    llm_with_beta = llm
-    if has_pdfs and ENABLE_PDF_BETA:
-        from core.llm_factory import get_llm
-        llm_with_beta = get_llm(include_beta_headers=True)
-
     if ENABLE_LLM_MAP_SUMMARIZATION:
         logger.info("LLM map summarization is enabled - processing with AI")
         
         if use_base64 and file_docs:
-
             logger.info(
                 "Base64 attachment mode enabled",
                 extra={"file_docs": len(file_docs)}
@@ -78,7 +77,6 @@ async def summarize_chunks(
 
         else:
             for idx, chunk in enumerate(chunks):
-
                 logger.debug(
                     "Preparing text chunk for summarization",
                     extra={"chunk_index": idx, "chunk_length": len(chunk)}
@@ -103,7 +101,6 @@ async def summarize_chunks(
                 # Use appropriate client based on PDF detection
                 active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
                 
-                
                 response = await active_llm.messages.create(
                     model=ANTHROPIC_MODEL,
                     max_tokens=MAX_TOKENS,
@@ -119,35 +116,6 @@ async def summarize_chunks(
                     elif chunk.type == "content_block_stop":
                         break
                 summaries.append(text_summary)
-
-        for idx, image_doc in enumerate(image_docs):
-
-            logger.debug(
-                "Preparing image for vision analysis",
-                extra={"image_index": idx, "file_name": image_doc.filename}
-            )
-
-            message_content = _build_image_message(image_doc)
-
-            # Use appropriate client based on PDF detection
-            active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
-            
-            
-            response = await active_llm.messages.create(
-                model=ANTHROPIC_MODEL,
-                max_tokens=MAX_TOKENS,
-                messages=[{"role": "user", "content": message_content}],
-                stream=True
-            )
-            
-            # Collect streamed response
-            text_summary = ""
-            async for chunk in response:
-                if chunk.type == "content_block_delta" and hasattr(chunk.delta, "text"):
-                    text_summary += chunk.delta.text
-                elif chunk.type == "content_block_stop":
-                    break
-            summaries.append(text_summary)
 
     else:
         logger.info("LLM map summarization is disabled - using raw data")
@@ -165,14 +133,66 @@ async def summarize_chunks(
             
             # Populate base64 collector for images if enabled
             if base64_collector is not None and hasattr(image_doc, 'source_path') and image_doc.source_path:
+                logger.debug(
+                    "Processing image in raw mode",
+                    extra={"image_index": idx, "file_name": image_doc.filename, "processing_path": "raw_mode"}
+                )
                 try:
                     import base64
-                    with open(image_doc.source_path, 'rb') as f:
-                        image_content = f.read()
+                    # ✅ Use already compressed image_data from document, don't re-read file
+                    image_content = image_doc.image_data
+                    media_type = getattr(image_doc, 'source_media_type', 'image/jpeg')
+                    
+                    # ✅ Only compress if image_data is still oversized (wasn't compressed in document loader)
+                    if len(image_content) > 4_500_000:
+                        logger.warning(
+                            "Image still exceeds safe size limit; compressing before sending",
+                            extra={"filename": image_doc.filename, "original_size": len(image_content)}
+                        )
+                        from utils.image_handler import compress_image_to_limit
+                        try:
+                            image_content, media_type = compress_image_to_limit(image_content)
+                            logger.info(
+                                "Image compressed",
+                                extra={"filename": image_doc.filename, "compressed_size": len(image_content)}
+                            )
+                        except Exception as compress_error:
+                            logger.error(
+                                "Image compression failed, using original image",
+                                extra={
+                                    "filename": image_doc.filename, 
+                                    "original_size": len(image_content),
+                                    "error": str(compress_error)
+                                }
+                            )
+                            # Fall back to original image_data without compression
+                            media_type = getattr(image_doc, 'source_media_type', 'image/jpeg')
+                    else:
+                        media_type = getattr(image_doc, 'source_media_type', 'image/jpeg')
+                        logger.debug(
+                            "Image does not need compression",
+                            extra={
+                                "filename": image_doc.filename,
+                                "image_size": len(image_content),
+                                "compression_threshold": 4_500_000
+                            }
+                        )
+                        
                         base64_content = base64.b64encode(image_content).decode('utf-8')
                         
-                        # Determine media type
-                        media_type = getattr(image_doc, 'source_media_type', 'image/jpeg')
+                        # ✅ Check final base64 size before adding to collector
+                        if len(base64_content) > 5_242_880:  # 5MB API limit
+                            logger.error(
+                                "Skipping oversized image from base64 collector",
+                                extra={
+                                    "filename": image_doc.filename,
+                                    "base64_size": len(base64_content),
+                                    "limit": 5_242_880,
+                                    "size_mb": f"{len(base64_content) / 1024 / 1024:.2f}MB"
+                                }
+                            )
+                            # Skip adding this oversized image to base64_collector
+                            continue
                         
                         # Add to base64 collector
                         base64_collector.append({
@@ -216,7 +236,6 @@ async def summarize_chunks(
                         import base64
                         with open(file_doc.source_path, 'rb') as f:
                             file_content = f.read()
-                            base64_content = base64.b64encode(file_content).decode('utf-8')
                             
                             # Determine media type
                             media_type = getattr(file_doc, 'source_media_type', None)
@@ -227,6 +246,23 @@ async def summarize_chunks(
                                     media_type = "application/pdf"
                                 else:
                                     media_type = "application/octet-stream"
+                            
+                            base64_content = base64.b64encode(file_content).decode('utf-8')
+                            
+                            # ✅ Check final base64 size before adding to collector
+                            if len(base64_content) > 5_242_880:  # 5MB API limit
+                                logger.error(
+                                    "Skipping oversized file from base64 collector",
+                                    extra={
+                                        "filename": file_doc.filename,
+                                        "media_type": media_type,
+                                        "base64_size": len(base64_content),
+                                        "limit": 5_242_880,
+                                        "size_mb": f"{len(base64_content) / 1024 / 1024:.2f}MB"
+                                    }
+                                )
+                                # Skip adding this oversized file to base64_collector
+                                continue
                             
                             base64_collector.append({
                                 "type": "file",
@@ -347,7 +383,6 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
             # Use appropriate client based on PDF detection
             active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
             
-            
             response = await active_llm.messages.create(
                 model=ANTHROPIC_MODEL,
                 max_tokens=MAX_TOKENS,
@@ -403,19 +438,18 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
                     import base64
                     with open(doc.source_path, 'rb') as f:
                         file_content = f.read()
-                        base64_content = base64.b64encode(file_content).decode('utf-8')
                         
                         # Determine media type with proper PDF detection
-                        media_type = getattr(doc, 'source_media_type', 'image/jpeg')
+                        media_type = getattr(doc, 'source_media_type', None)
+                        if not media_type:
+                            # Fallback detection based on filename
+                            filename_lower = doc.filename.lower()
+                            if filename_lower.endswith('.pdf'):
+                                media_type = "application/pdf"
+                            else:
+                                media_type = "application/octet-stream"
                         
-                        # Log what we're adding to base64_collector
-                        logger.debug("Adding to base64_collector", extra={
-                            "filename": doc.filename,
-                            "detected_media_type": media_type,
-                            "source_media_type": getattr(doc, 'source_media_type', None),
-                            "is_pdf": doc.filename.lower().endswith('.pdf')
-                        })
-                        
+                        base64_content = base64.b64encode(file_content).decode('utf-8')
                         
                         base64_collector.append({
                             "type": "file",
@@ -525,47 +559,4 @@ async def _build_file_message(doc):
 def _encode_file_from_path(path: str) -> str:
 
     with open(path, "rb") as source:
-        return base64.standard_b64encode(source.read()).decode("ascii")
-
-
-def _build_image_message(image_doc):
-    from utils.image_handler import compress_image_to_limit  # add this import
-
-    image_data = image_doc.image_data
-
-    # ✅ Compress if over ~4.5MB to stay safely under the 5MB API limit
-    if len(image_data) > 4_500_000:
-        logger.warning(
-            "Image exceeds safe size limit; compressing before sending",
-            extra={"filename": image_doc.filename, "original_size": len(image_data)}
-        )
-        image_data, media_type = compress_image_to_limit(image_data)
-        logger.info(
-            "Image compressed",
-            extra={"filename": image_doc.filename, "compressed_size": len(image_data)}
-        )
-    else:
-        media_type = image_doc.image_media_type
-
-    encoded_image, media_type = encode_image_for_claude(
-        image_data,
-        image_doc.filename,
-        media_type
-    )
-
-    return [
-        {
-            "type": "text",
-            "text": (
-                "Extract all text and data from this image. If it's a tax document, extract all box numbers, labels, and values exactly as shown."
-            )
-        },
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": encoded_image
-            }
-        }
-    ]
+        return base64.standard_b64encode(source.read()).decode('ascii')

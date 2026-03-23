@@ -54,7 +54,9 @@ class DocumentPipeline:
                 "image_docs": len(image_docs),
                 "chunking_enabled": ENABLE_CHUNKING,
                 "base64_enabled": ENABLE_BASE64_INPUT,
-                "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION
+                "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION,
+                "DEBUG_ENABLE_BASE64_INPUT_VALUE": ENABLE_BASE64_INPUT,
+                "DEBUG_ENABLE_BASE64_INPUT_TYPE": type(ENABLE_BASE64_INPUT)
             }
         )
 
@@ -80,6 +82,15 @@ class DocumentPipeline:
 
         base64_collector = [] if ENABLE_BASE64_INPUT else None
 
+        self.logger.info(
+            "Base64 collector initialized",
+            extra={
+                "ENABLE_BASE64_INPUT": ENABLE_BASE64_INPUT,
+                "base64_collector_is_none": base64_collector is None,
+                "base64_collector_length": len(base64_collector) if base64_collector else 0
+            }
+        )
+
         chunk_summaries = await summarize_chunks(
             chunks,
             llm,
@@ -96,8 +107,8 @@ class DocumentPipeline:
             llm,
             user_instruction,
             template_name=template_name,
-            base64_collector=base64_collector,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
+            base64_collector=base64_collector
         )
 
         self.logger.info("Reduce step completed", extra={"summary_length": len(final_summary)})
