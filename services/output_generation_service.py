@@ -166,12 +166,27 @@ class OutputGenerationService:
                 extra={"format": format_type}
             )
         
-        # Validate format
+        # Validate format and map unsupported formats to supported ones
+        format_mapping = {
+            "table": "markdown",  # Map table format to markdown
+            "code": "text"       # Map code format to text
+        }
+        
+        # Apply mapping if needed
+        original_format = format_type
+        format_type = format_mapping.get(format_type, format_type)
+        
+        if format_type != original_format:
+            self.logger.info(
+                "Mapped output format",
+                extra={"original": original_format, "mapped": format_type}
+            )
+        
         supported_formats = ["markdown", "csv", "json", "txt", "text"]
         if format_type not in supported_formats:
             raise OutputFormatException(
-                f"Unsupported output format: {format_type}",
-                output_format=format_type,
+                f"Unsupported output format: {original_format}",
+                output_format=original_format,
                 supported_formats=supported_formats
             )
         

@@ -11,6 +11,7 @@ from engine.pipeline import DocumentPipeline
 from services.upload_service import generate_request_id, persist_uploads
 from services.service_container import get_service, configure_services
 from utils.logger import get_logger, build_log_extra
+from exceptions.document_exceptions import PasswordProtectedPDFException
 
 # Configure services on import
 configure_services()
@@ -125,7 +126,46 @@ async def process_documents(
         )
 
         # Load documents using new service
-        documents = await document_processing_service.load_documents(saved_files)
+        try:
+            documents = await document_processing_service.load_documents(saved_files)
+        except PasswordProtectedPDFException as e:
+            # Handle password-protected PDF errors with specific HTTP responses
+            filename = getattr(e, 'filename', 'unknown')
+            
+            if e.error_code == "password_required":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "password_required",
+                        "filename": filename
+                    }
+                )
+            elif e.error_code == "wrong_password":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "wrong_password",
+                        "filename": filename
+                    }
+                )
+            elif e.error_code == "invalid_pdf":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "invalid_pdf",
+                        "filename": filename
+                    }
+                )
+            else:
+                # Generic password-protected PDF error
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "pdf_processing_error",
+                        "filename": filename,
+                        "message": str(e)
+                    }
+                )
 
         # Clean prompts using new service
         decoded_prompt = unquote_plus(prompt)

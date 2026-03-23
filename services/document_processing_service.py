@@ -7,7 +7,8 @@ from utils.logger import get_logger
 from exceptions.document_exceptions import (
     DocumentProcessingException,
     FileValidationException,
-    DocumentLoadException
+    DocumentLoadException,
+    PasswordProtectedPDFException
 )
 from config.config_manager import get_config_manager
 from strategies.document_strategies import DocumentStrategyFactory
@@ -72,6 +73,19 @@ class DocumentProcessingService:
                     
                 except FileValidationException:
                     raise  # Re-raise validation exceptions
+                except PasswordProtectedPDFException as e:
+                    # Handle password-protected PDF errors with specific error codes
+                    filename = getattr(file, 'filename', 'unknown')
+                    self.logger.error(
+                        "Password-protected PDF error during document loading",
+                        extra={
+                            "filename": filename,
+                            "error_code": e.error_code,
+                            "source_path": getattr(file, 'file_path', None)
+                        }
+                    )
+                    # Re-raise to be handled by API layer
+                    raise
                 except Exception as e:
                     filename = getattr(file, 'filename', 'unknown')
                     raise DocumentLoadException(

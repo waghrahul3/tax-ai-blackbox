@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import os
 
 from utils.logger import get_logger
 from utils.image_handler import encode_image_for_claude
 from core.config import ENABLE_LLM_MAP_SUMMARIZATION, ANTHROPIC_MODEL, MAX_TOKENS, ENABLE_PDF_BETA
+from services.pdf_processing_service import get_pdf_service
 
 logger = get_logger(__name__)
 
@@ -503,6 +505,78 @@ async def _build_file_message(doc):
             media_type = "application/octet-stream"
     else:
         media_type = media_type.lower()
+
+    # Check if this PDF was processed with a password
+    is_password_processed_pdf = (
+        media_type == "application/pdf" and 
+        getattr(doc, 'password_processed', False)
+    )
+
+    if is_password_processed_pdf:
+        # Use PDF processing service to determine how to handle the file
+        pdf_service = get_pdf_service()
+        decrypted_path = getattr(doc, 'source_path', None)
+        text_content = (getattr(doc, "text_content", None) or "").strip()
+        
+        # Check if we have a decrypted copy
+        if decrypted_path and pdf_service.is_decrypted_file(decrypted_path) and os.path.exists(decrypted_path):
+            logger.info(
+                "Sending decrypted PDF copy to LLM",
+                extra={"file_name": doc.filename, "decrypted_path": decrypted_path}
+            )
+            
+            # Send the decrypted copy as a normal PDF document
+            try:
+                encoded_decrypted_file = await asyncio.to_thread(_encode_file_from_path, decrypted_path)
+                content = [
+                    {
+                        "type": "text",
+                        "text": (
+                            "This document was password-protected and has been decrypted for processing. "
+                            "Summarize the attached document. Extract key facts, amounts, and tables in detail."
+                        )
+                    },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": encoded_decrypted_file
+                        }
+                    }
+                ]
+                return content, encoded_decrypted_file
+            except Exception as e:
+                logger.warning(
+                    "Failed to encode decrypted PDF, falling back to text",
+                    extra={"file_name": doc.filename, "error": str(e)}
+                )
+                # Fall back to text-only mode
+        
+        # If no decrypted copy available or failed to use it, send extracted text only
+        if not text_content:
+            logger.warning(
+                "Password-protected PDF has no extracted text to send",
+                extra={"file_name": doc.filename}
+            )
+            return None, None
+        
+        logger.info(
+            "Sending extracted text for password-protected PDF",
+            extra={"file_name": doc.filename, "text_length": len(text_content)}
+        )
+        
+        content = [
+            {
+                "type": "text",
+                "text": (
+                    "This document was password-protected and has been processed locally. "
+                    "Summarize the extracted text content below:\n\n"
+                    f"{text_content}"
+                )
+            }
+        ]
+        return content, None  # No encoded file for text-only mode
 
     if media_type == "application/pdf":
         content = [

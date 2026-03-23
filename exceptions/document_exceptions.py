@@ -23,6 +23,14 @@ class FileValidationException(DocumentProcessingException):
         self.validation_rule = validation_rule
 
 
+class PasswordProtectedPDFException(DocumentProcessingException):
+    """Raised when password-protected PDF processing fails."""
+    
+    def __init__(self, message: str, filename: str = None, error_code: str = None):
+        super().__init__(message, filename, "password_protected_pdf")
+        self.error_code = error_code or "PASSWORD_PROTECTED_PDF_ERROR"
+
+
 class DocumentLoadException(DocumentProcessingException):
     """Raised when document loading fails."""
     

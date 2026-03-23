@@ -4,10 +4,10 @@ import tempfile
 from langchain_community.document_loaders.image import UnstructuredImageLoader
 
 from utils.logger import get_logger
-from utils.pdf_extractor import extract_text_from_pdf
 from utils.image_handler import is_image_file, get_image_media_type
 from models.document import DocumentContent
 from services.document_loader import MAX_IMAGE_BYTES
+from services.pdf_processing_service import get_pdf_service
 
 
 def _looks_like_pdf(file, data: bytes) -> bool:
@@ -93,39 +93,50 @@ class LocalStorage:
             # Always preserve PDF media type regardless of text extraction success
             pdf_media_type = "application/pdf"
             
+            # Use PDF processing service for all PDF operations
             try:
-                pdf_text = extract_text_from_pdf(data)
-
-                if pdf_text.strip():
-                    self.logger.info(
-                        "Extracted PDF text",
-                        extra={"file_name": filename, "length": len(pdf_text)}
-                    )
-                    return DocumentContent(
-                        content_type="text",
-                        filename=filename,
-                        text_content=pdf_text,
-                        source_path=source_path,
-                        source_media_type=pdf_media_type
-                    )
-
-            except Exception:
-                self.logger.exception(
-                    "Failed to extract PDF text",
-                    extra={"file_name": filename}
+                pdf_service = get_pdf_service()
+                processing_result = pdf_service.process_pdf(filename, data, source_path)
+                
+                # Create document content from processing result
+                return pdf_service.create_document_content(
+                    filename=filename,
+                    result=processing_result,
+                    original_path=source_path,
+                    media_type=pdf_media_type
                 )
+                
+            except Exception as e:
+                # Handle password-protected PDF exceptions
+                from exceptions.document_exceptions import PasswordProtectedPDFException
+                if isinstance(e, PasswordProtectedPDFException):
+                    self.logger.error(
+                        "Password-protected PDF error",
+                        extra={
+                            "file_name": filename,
+                            "error_code": e.error_code
+                        }
+                    )
+                    raise  # Re-raise to be handled by upper layers
+                else:
+                    self.logger.exception(
+                        "Failed to process PDF",
+                        extra={"file_name": filename}
+                    )
 
-            # If text extraction failed or returned empty, still treat as PDF document
+            # If we get here, processing failed but didn't raise an exception
+            # Treat as binary PDF document
             self.logger.warning(
-                "PDF text extraction failed or returned empty, treating as binary PDF",
+                "PDF processing failed, treating as binary PDF",
                 extra={"file_name": filename}
             )
             return DocumentContent(
                 content_type="text",
                 filename=filename,
-                text_content="",  # Empty text content for failed extraction
+                text_content="",  # Empty text content for failed processing
                 source_path=source_path,
-                source_media_type=pdf_media_type
+                source_media_type=pdf_media_type,
+                password_processed=False
             )
 
         self.logger.debug(
