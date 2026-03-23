@@ -167,7 +167,7 @@ class OutputGenerationService:
             )
         
         # Validate format
-        supported_formats = ["markdown", "csv", "json", "txt"]
+        supported_formats = ["markdown", "csv", "json", "txt", "text"]
         if format_type not in supported_formats:
             raise OutputFormatException(
                 f"Unsupported output format: {format_type}",

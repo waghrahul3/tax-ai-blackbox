@@ -27,7 +27,8 @@ class FeatureFlags:
             "request_logging": self._get_bool_flag("ENABLE_REQUEST_LOGGING", True),
             "file_compression": self._get_bool_flag("ENABLE_FILE_COMPRESSION", True),
             "template_caching": self._get_bool_flag("ENABLE_TEMPLATE_CACHING", True),
-            "output_validation": self._get_bool_flag("ENABLE_OUTPUT_VALIDATION", True)
+            "output_validation": self._get_bool_flag("ENABLE_OUTPUT_VALIDATION", True),
+            "image_text_extraction": self._get_bool_flag("ENABLE_IMAGE_TEXT_EXTRACTION", True)
         }
         
         self.logger.info(
