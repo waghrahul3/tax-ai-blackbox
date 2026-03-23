@@ -4,6 +4,7 @@ from typing import List, Dict, Set
 from utils.logger import get_logger
 from utils.image_handler import is_image_file
 from exceptions.document_exceptions import FileValidationException
+from config.config_manager import get_config_manager
 
 
 class FileValidationService:
@@ -11,15 +12,16 @@ class FileValidationService:
     
     def __init__(self):
         self.logger = get_logger(__name__)
-        self._supported_text_extensions = {
-            '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm'
-        }
-        self._supported_image_extensions = {
-            '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'
-        }
-        self._supported_pdf_extensions = {'.pdf'}
-        self._max_file_size = 50 * 1024 * 1024  # 50MB
-        self._max_image_size = 4_500_000  # 4.5MB for API safety
+        self.config_manager = get_config_manager()
+        self.file_config = self.config_manager.file_config()
+        self.api_limits = self.config_manager.api_limits()
+        
+        # Use new configuration system
+        self._supported_text_extensions = self.file_config.get_supported_extensions('text')
+        self._supported_image_extensions = self.file_config.get_supported_extensions('image')
+        self._supported_pdf_extensions = self.file_config.get_supported_extensions('pdf')
+        self._max_file_size = self.api_limits.get_limit("max_file_size_mb") * 1024 * 1024
+        self._max_image_size = self.api_limits.get_limit("max_image_bytes")
     
     def validate_files(self, files: List) -> Dict[str, any]:
         """

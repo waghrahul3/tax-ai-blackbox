@@ -2,7 +2,6 @@
 
 from typing import List
 from models.document import DocumentContent
-from services.document_loader import MAX_IMAGE_BYTES
 from storage.storage_factory import get_storage
 from utils.logger import get_logger
 from exceptions.document_exceptions import (
@@ -10,6 +9,7 @@ from exceptions.document_exceptions import (
     FileValidationException,
     DocumentLoadException
 )
+from config.config_manager import get_config_manager
 
 
 class DocumentProcessingService:
@@ -18,6 +18,9 @@ class DocumentProcessingService:
     def __init__(self, storage=None):
         self.logger = get_logger(__name__)
         self.storage = storage or get_storage()
+        self.config_manager = get_config_manager()
+        self.api_limits = self.config_manager.api_limits()
+        self.max_image_bytes = self.api_limits.get_limit("max_image_bytes")
     
     async def load_documents(self, files: List) -> List[DocumentContent]:
         """
@@ -151,18 +154,18 @@ class DocumentProcessingService:
         
         image_size = len(doc.image_data)
         
-        if image_size > MAX_IMAGE_BYTES:
+        if image_size > self.max_image_bytes:
             self.logger.warning(
                 "Image file exceeds safe API limit and will be compressed",
                 extra={
                     "file_name": doc.filename, 
                     "size": image_size, 
-                    "limit": MAX_IMAGE_BYTES
+                    "limit": self.max_image_bytes
                 }
             )
         
         # Check for extremely large images that might cause issues
-        if image_size > MAX_IMAGE_BYTES * 2:
+        if image_size > self.max_image_bytes * 2:
             raise FileValidationException(
                 "Image file is too large for processing",
                 filename=doc.filename,
