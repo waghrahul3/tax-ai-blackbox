@@ -66,7 +66,9 @@ class LocalStorage:
             )
 
         if _looks_like_pdf(file, data):
-
+            # Always preserve PDF media type regardless of text extraction success
+            pdf_media_type = "application/pdf"
+            
             try:
                 pdf_text = extract_text_from_pdf(data)
 
@@ -80,7 +82,7 @@ class LocalStorage:
                         filename=filename,
                         text_content=pdf_text,
                         source_path=source_path,
-                        source_media_type="application/pdf"
+                        source_media_type=pdf_media_type
                     )
 
             except Exception:
@@ -88,6 +90,19 @@ class LocalStorage:
                     "Failed to extract PDF text",
                     extra={"file_name": filename}
                 )
+
+            # If text extraction failed or returned empty, still treat as PDF document
+            self.logger.warning(
+                "PDF text extraction failed or returned empty, treating as binary PDF",
+                extra={"file_name": filename}
+            )
+            return DocumentContent(
+                content_type="text",
+                filename=filename,
+                text_content="",  # Empty text content for failed extraction
+                source_path=source_path,
+                source_media_type=pdf_media_type
+            )
 
         self.logger.debug(
             "Decoding file as text",

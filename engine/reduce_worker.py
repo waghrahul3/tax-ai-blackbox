@@ -53,7 +53,14 @@ async def reduce_summaries(
     -------
     The model's text response as a plain string.
     """
-
+    
+    # OBVIOUS DEBUG: This should always show up
+    logger.error("=== REDUCE_WORKER DEBUG START ===", extra={"base64_collector_count": len(base64_collector) if base64_collector else 0})
+    if base64_collector:
+        for i, item in enumerate(base64_collector):
+            logger.error(f"=== ENTRY {i} ===", extra={"type": item.get("type"), "filename": item.get("filename") or item.get("file_name"), "media_type": item.get("media_type"), "mime_type": item.get("mime_type")})
+    logger.error("=== REDUCE_WORKER DEBUG END ===")
+    
     # Check if PDF processing is needed for beta headers
     has_pdfs = _has_pdf_attachments(base64_collector)
 
@@ -126,28 +133,43 @@ async def reduce_summaries(
         if base64_collector:
             logger.info(
                 "Including base64 file attachments in final LLM call",
-                extra={"file_count": len(base64_collector)},
+                extra={"file_count": len(base64_collector)}
             )
+            
+            # Debug: Log all base64_collector entries before processing
+            for i, file_data in enumerate(base64_collector):
+                logger.info(
+                    f"Base64 collector entry {i}",
+                    extra={
+                        "index": i,
+                        "type": file_data.get("type"),
+                        "filename": file_data.get("filename") or file_data.get("file_name"),
+                        "media_type": file_data.get("media_type"),
+                        "mime_type": file_data.get("mime_type"),
+                        "all_keys": list(file_data.keys())
+                    }
+                )
+            
             for file_data in base64_collector:
-                # Handle different data structures from map_worker
-                if file_data.get("type") == "file":
-                    content = file_data.get("content") or file_data.get("encoded", "")
-                    media_type = file_data.get("media_type") or file_data.get("mime_type", "application/octet-stream")
-                    
+                content = file_data.get("content") or file_data.get("encoded", "")
+                media_type = file_data.get("media_type") or file_data.get("mime_type", "application/octet-stream")
+                filename = file_data.get("filename") or file_data.get("file_name", "")
+
+                # Route by media type, not just by type field
+                if media_type == "application/pdf":
+                    # PDFs go into document blocks
                     human_content.append(
                         {
                             "type": "document",
                             "source": {
                                 "type": "base64",
-                                "media_type": media_type,
+                                "media_type": "application/pdf",
                                 "data": content,
                             },
                         }
                     )
-                elif file_data.get("type") == "image":
-                    content = file_data.get("content") or file_data.get("encoded", "")
-                    media_type = file_data.get("media_type") or file_data.get("mime_type", "image/jpeg")
-                    
+                elif media_type.startswith("image/"):
+                    # Images go into image blocks
                     human_content.append(
                         {
                             "type": "image",
@@ -157,6 +179,11 @@ async def reduce_summaries(
                                 "data": content,
                             },
                         }
+                    )
+                else:
+                    logger.warning(
+                        "Skipping unsupported file type in base64_collector",
+                        extra={"filename": filename, "media_type": media_type}
                     )
 
         # ── Resolve max_tokens from template or use global ─────────────────────
@@ -245,6 +272,7 @@ async def reduce_summaries(
 
         if resolved_system:
             create_kwargs["system"] = resolved_system
+
 
         stream = await active_llm.messages.create(**create_kwargs)
 

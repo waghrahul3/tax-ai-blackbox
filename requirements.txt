@@ -10,3 +10,4 @@ pandas
 anthropic
 python-multipart
 structlog
+Pillow

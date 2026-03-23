@@ -52,6 +52,12 @@ async def summarize_chunks(
 
     summaries = []
 
+    # Define llm_with_beta at function level to ensure it's available everywhere
+    llm_with_beta = llm
+    if has_pdfs and ENABLE_PDF_BETA:
+        from core.llm_factory import get_llm
+        llm_with_beta = get_llm(include_beta_headers=True)
+
     if ENABLE_LLM_MAP_SUMMARIZATION:
         logger.info("LLM map summarization is enabled - processing with AI")
         
@@ -71,12 +77,6 @@ async def summarize_chunks(
             summaries.extend(file_summaries)
 
         else:
-            llm_with_beta = llm
-            if has_pdfs and ENABLE_PDF_BETA:
-                # Need to create a new client with beta headers
-                from core.llm_factory import get_llm
-                llm_with_beta = get_llm(include_beta_headers=True)
-        
             for idx, chunk in enumerate(chunks):
 
                 logger.debug(
@@ -102,6 +102,7 @@ async def summarize_chunks(
 
                 # Use appropriate client based on PDF detection
                 active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+                
                 
                 response = await active_llm.messages.create(
                     model=ANTHROPIC_MODEL,
@@ -130,6 +131,7 @@ async def summarize_chunks(
 
             # Use appropriate client based on PDF detection
             active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
+            
             
             response = await active_llm.messages.create(
                 model=ANTHROPIC_MODEL,
@@ -216,7 +218,15 @@ async def summarize_chunks(
                             file_content = f.read()
                             base64_content = base64.b64encode(file_content).decode('utf-8')
                             
-                            media_type = getattr(file_doc, 'source_media_type', 'application/octet-stream')
+                            # Determine media type
+                            media_type = getattr(file_doc, 'source_media_type', None)
+                            if not media_type:
+                                # Fallback detection based on filename
+                                filename_lower = file_doc.filename.lower()
+                                if filename_lower.endswith('.pdf'):
+                                    media_type = "application/pdf"
+                                else:
+                                    media_type = "application/octet-stream"
                             
                             base64_collector.append({
                                 "type": "file",
@@ -337,6 +347,7 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
             # Use appropriate client based on PDF detection
             active_llm = llm_with_beta if has_pdfs and ENABLE_PDF_BETA else llm
             
+            
             response = await active_llm.messages.create(
                 model=ANTHROPIC_MODEL,
                 max_tokens=MAX_TOKENS,
@@ -354,13 +365,23 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
             summaries.append(text_summary)
 
             if base64_collector is not None and encoded_payload is not None:
+                # Determine media type with proper PDF detection
+                media_type = getattr(doc, 'source_media_type', None)
+                if not media_type:
+                    # Fallback detection based on filename
+                    filename_lower = doc.filename.lower()
+                    if filename_lower.endswith('.pdf'):
+                        media_type = "application/pdf"
+                    else:
+                        media_type = "application/octet-stream"
+                
                 base64_collector.append(
                     {
                         "index": idx,
                         "file_name": doc.filename,
                         "encoded": encoded_payload,
                         "source_path": doc.source_path,
-                        "mime_type": doc.source_media_type or "application/octet-stream"
+                        "media_type": media_type
                     }
                 )
         else:
@@ -384,9 +405,21 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
                         file_content = f.read()
                         base64_content = base64.b64encode(file_content).decode('utf-8')
                         
+                        # Determine media type with proper PDF detection
+                        media_type = getattr(doc, 'source_media_type', 'image/jpeg')
+                        
+                        # Log what we're adding to base64_collector
+                        logger.debug("Adding to base64_collector", extra={
+                            "filename": doc.filename,
+                            "detected_media_type": media_type,
+                            "source_media_type": getattr(doc, 'source_media_type', None),
+                            "is_pdf": doc.filename.lower().endswith('.pdf')
+                        })
+                        
+                        
                         base64_collector.append({
                             "type": "file",
-                            "media_type": doc.source_media_type or "application/octet-stream",
+                            "media_type": media_type,
                             "filename": doc.filename,
                             "content": base64_content
                         })
@@ -395,7 +428,7 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
                             "Added file to base64 collector in raw mode",
                             extra={
                                 "filename": doc.filename,
-                                "media_type": doc.source_media_type,
+                                "media_type": media_type,
                                 "content_length": len(base64_content)
                             }
                         )
@@ -425,7 +458,17 @@ async def _build_file_message(doc):
         )
         return None, None
 
-    media_type = (doc.source_media_type or "application/octet-stream").lower()
+    # Determine media type with proper PDF detection
+    media_type = getattr(doc, 'source_media_type', None)
+    if not media_type:
+        # Fallback detection based on filename
+        filename_lower = doc.filename.lower()
+        if filename_lower.endswith('.pdf'):
+            media_type = "application/pdf"
+        else:
+            media_type = "application/octet-stream"
+    else:
+        media_type = media_type.lower()
 
     if media_type == "application/pdf":
         content = [
@@ -486,11 +529,28 @@ def _encode_file_from_path(path: str) -> str:
 
 
 def _build_image_message(image_doc):
+    from utils.image_handler import compress_image_to_limit  # add this import
+
+    image_data = image_doc.image_data
+
+    # ✅ Compress if over ~4.5MB to stay safely under the 5MB API limit
+    if len(image_data) > 4_500_000:
+        logger.warning(
+            "Image exceeds safe size limit; compressing before sending",
+            extra={"filename": image_doc.filename, "original_size": len(image_data)}
+        )
+        image_data, media_type = compress_image_to_limit(image_data)
+        logger.info(
+            "Image compressed",
+            extra={"filename": image_doc.filename, "compressed_size": len(image_data)}
+        )
+    else:
+        media_type = image_doc.image_media_type
 
     encoded_image, media_type = encode_image_for_claude(
-        image_doc.image_data,
+        image_data,
         image_doc.filename,
-        image_doc.image_media_type
+        media_type
     )
 
     return [
