@@ -1,7 +1,5 @@
 fastapi
 uvicorn
-langchain-text-splitters
-langchain-community
 python-dotenv
 PyPDF2
 pymupdf
