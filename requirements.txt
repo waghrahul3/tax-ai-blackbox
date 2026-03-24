@@ -9,3 +9,4 @@ anthropic
 python-multipart
 structlog
 Pillow
+langchain-community
