@@ -8,13 +8,19 @@ All original logic, flags, and logging are preserved exactly.
 import anthropic
 
 from core.prompt_templates import get_prompt_template
-from core.config import ENABLE_LLM_SUMMARIZATION, ENABLE_BASE64_INPUT, ANTHROPIC_MODEL, MAX_TOKENS, ENABLE_PDF_BETA
+from core.config import (
+    ENABLE_LLM_SUMMARIZATION,
+    ENABLE_BASE64_INPUT,
+    ANTHROPIC_MODEL,
+    MAX_TOKENS,
+    ENABLE_PDF_BETA
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def _has_pdf_attachments(base64_collector):
+def _has_pdf_attachments(base64_collector: list[dict] | None) -> bool:
     """Check if any attachments in base64_collector are PDFs."""
     if not base64_collector:
         return False
@@ -55,10 +61,20 @@ async def reduce_summaries(
     """
     
     # OBVIOUS DEBUG: This should always show up
-    logger.error("=== REDUCE_WORKER DEBUG START ===", extra={"base64_collector_count": len(base64_collector) if base64_collector else 0})
+    collector_count = len(base64_collector) if base64_collector else 0
+    logger.error(
+        "=== REDUCE_WORKER DEBUG START ===",
+        extra={"base64_collector_count": collector_count}
+    )
     if base64_collector:
         for i, item in enumerate(base64_collector):
-            logger.error(f"=== ENTRY {i} ===", extra={"type": item.get("type"), "filename": item.get("filename") or item.get("file_name"), "media_type": item.get("media_type"), "mime_type": item.get("mime_type")})
+            extra_data = {
+                "type": item.get("type"),
+                "filename": item.get("filename") or item.get("file_name"),
+                "media_type": item.get("media_type"),
+                "mime_type": item.get("mime_type")
+            }
+            logger.error(f"=== ENTRY {i} ===", extra=extra_data)
     logger.error("=== REDUCE_WORKER DEBUG END ===")
     
     # Check if PDF processing is needed for beta headers
@@ -76,10 +92,6 @@ async def reduce_summaries(
                 if user_instruction and len(user_instruction) > 100
                 else user_instruction
             ),
-            "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION,
-            "base64_collector_count": len(base64_collector) if base64_collector else 0,
-            "has_pdf_attachments": has_pdfs,
-            "pdf_beta_enabled": ENABLE_PDF_BETA,
             "has_system_prompt": system_prompt is not None,
             "system_prompt_length": len(system_prompt) if system_prompt else 0,
             "system_prompt_preview": (
@@ -87,12 +99,59 @@ async def reduce_summaries(
                 if system_prompt and len(system_prompt) > 100
                 else system_prompt
             ),
+            "llm_summarization_enabled": ENABLE_LLM_SUMMARIZATION,
+            "base64_collector_count": len(base64_collector) if base64_collector else 0,
+            "has_pdf_attachments": has_pdfs,
+            "pdf_beta_enabled": ENABLE_PDF_BETA,
         },
     )
 
     combined = "\n".join(summaries)
 
     logger.debug("Combined summaries", extra={"combined_length": len(combined)})
+
+    # ── Resolve the system prompt and user content based on logic ────────
+    resolved_system: str = ""
+    user_content_text: str = ""
+
+    if system_prompt:
+        # system_prompt has value → system gets system_prompt,
+        # user gets user_instruction
+        resolved_system = system_prompt
+        if user_instruction:
+            user_content_text = f"User instruction:\n{user_instruction}"
+        logger.info(
+            "Using system_prompt for system role and user_instruction for user role",
+            extra={
+                "system_prompt_length": len(resolved_system),
+                "user_instruction_length": (
+                    len(user_instruction) if user_instruction else 0
+                ),
+            }
+        )
+    else:
+        # system_prompt is empty → system gets user_instruction, user content is minimal
+        if user_instruction:
+            resolved_system = user_instruction
+            logger.info(
+                "Using user_instruction for system role (system_prompt is empty)",
+                extra={
+                    "system_prompt_length": len(resolved_system),
+                    "user_instruction_moved_to_system": True,
+                }
+            )
+        else:
+            logger.info(
+                "No system_prompt or user_instruction provided",
+                extra={"using_defaults": True}
+            )
+
+    # Add document summaries to user content if not in base64 mode
+    if not ENABLE_BASE64_INPUT and combined:
+        if user_content_text:
+            user_content_text += f"\n\nDocument summaries:\n{combined}"
+        else:
+            user_content_text = f"Document summaries:\n{combined}"
 
     # ------------------------------------------------------------------
     # LLM path
@@ -106,28 +165,30 @@ async def reduce_summaries(
 
         human_content: list[dict] = []
 
-        # 1. Text block
+        # 1. Text block - use the new user_content_text logic
         if ENABLE_BASE64_INPUT:
-            # Include both document summaries AND user instruction in base64 mode
-            text_body = (
-                f"{user_instruction or ''}"
-            )
+            # In base64 mode, only include user_content_text (may be empty)
+            text_body = user_content_text
             logger.info(
-                "Base64 input mode enabled - sending summaries with file attachments",
+                "Base64 input mode enabled - sending user content with file attachments",
                 extra={"text_content_length": len(text_body)},
             )
         else:
-            text_body = (
-                f"You are provided with aggregated document summaries generated "
-                f"from the map stage.\n{combined}\n\nUser instruction:\n"
-                f"{user_instruction or ''}"
-            )
+            # In non-base64 mode, user_content_text already includes summaries
+            text_body = user_content_text
             logger.info(
-                "Base64 input mode disabled - sending combined summaries with user instruction",
+                "Base64 input mode disabled - sending user content with summaries",
                 extra={"text_content_length": len(text_body)},
             )
 
-        human_content.append({"type": "text", "text": text_body})
+        # Only add text block if there's actual content
+        if text_body.strip():
+            human_content.append({"type": "text", "text": text_body})
+        else:
+            logger.info(
+                "No text content for user message - only sending attachments if any",
+                extra={"has_attachments": bool(base64_collector)}
+            )
 
         # 2. Optional base64 attachments (documents / images)
         if base64_collector:
@@ -143,7 +204,9 @@ async def reduce_summaries(
                     extra={
                         "index": i,
                         "type": file_data.get("type"),
-                        "filename": file_data.get("filename") or file_data.get("file_name"),
+                        "filename": (
+                            file_data.get("filename") or file_data.get("file_name")
+                        ),
                         "media_type": file_data.get("media_type"),
                         "mime_type": file_data.get("mime_type"),
                         "all_keys": list(file_data.keys())
@@ -152,7 +215,10 @@ async def reduce_summaries(
             
             for file_data in base64_collector:
                 content = file_data.get("content") or file_data.get("encoded", "")
-                media_type = file_data.get("media_type") or file_data.get("mime_type", "application/octet-stream")
+                media_type = (
+                    file_data.get("media_type") or 
+                    file_data.get("mime_type", "application/octet-stream")
+                )
                 filename = file_data.get("filename") or file_data.get("file_name", "")
 
                 # Route by media type, not just by type field
@@ -180,10 +246,29 @@ async def reduce_summaries(
                             },
                         }
                     )
+                elif (
+                    file_data.get("type") == "document" or 
+                    file_data.get("type") == "file"
+                ):
+                    # Other documents (non-PDF files) also use document type
+                    human_content.append(
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": content,
+                            },
+                        }
+                    )
                 else:
                     logger.warning(
                         "Skipping unsupported file type in base64_collector",
-                        extra={"filename": filename, "media_type": media_type}
+                        extra={
+                            "filename": filename,
+                            "media_type": media_type,
+                            "file_type": file_data.get("type")
+                        }
                     )
 
         # ── Resolve max_tokens from template or use global ─────────────────────
@@ -197,42 +282,13 @@ async def reduce_summaries(
                     extra={"max_tokens": max_tokens_to_use, "template": template_name}
                 )
 
-        # ── Resolve the system prompt ──────────────────────────────────
-        resolved_system: str = ""
-
-        if template_name:
-            template_config = get_prompt_template(template_name)
-            logger.info(
-                "Using prompt template",
-                extra={
-                    "template_name": template_config.name,
-                    "step_name": template_config.primary_step.name,
-                },
-            )
-            primary_step = template_config.primary_step
-            if hasattr(primary_step, "prompt") and primary_step.prompt:
-                prompt_obj = primary_step.prompt
-                resolved_system = (
-                    prompt_obj.template
-                    if hasattr(prompt_obj, "template")
-                    else str(prompt_obj)
-                )
-            else:
-                resolved_system = (
-                    system_prompt if system_prompt else (user_instruction or "")
-                )
-        else:
-            logger.info("Using prompt-only reduce mode without template")
-            resolved_system = (
-                system_prompt if system_prompt else (user_instruction or "")
-            )
-
         logger.debug(
             "Formatted messages for LLM",
             extra={
                 "human_content_blocks": len(human_content),
                 "has_attachments": bool(base64_collector),
                 "system_prompt_length": len(resolved_system),
+                "user_content_length": len(user_content_text),
             },
         )
 
@@ -246,7 +302,12 @@ async def reduce_summaries(
             llm_with_beta = get_llm(include_beta_headers=True)
             logger.info(
                 "Adding PDF beta headers to reduce phase",
-                extra={"pdf_attachments_count": sum(1 for f in base64_collector or [] if (f.get("media_type") or f.get("mime_type", "")) == "application/pdf")}
+                extra={
+                    "pdf_attachments_count": sum(
+                        1 for f in base64_collector or [] 
+                        if (f.get("media_type") or f.get("mime_type", "")) == "application/pdf"
+                    )
+                }
             )
 
         # Use appropriate client based on PDF detection
@@ -262,7 +323,7 @@ async def reduce_summaries(
                     # attachments — keeps token overhead minimal.
                     "content": (
                         human_content[0]["text"]
-                        if len(human_content) == 1
+                        if len(human_content) == 1 and human_content[0].get("type") == "text"
                         else human_content
                     ),
                 }
