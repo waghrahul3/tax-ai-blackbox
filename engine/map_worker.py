@@ -3,14 +3,13 @@ import base64
 import os
 
 from utils.logger import get_logger
-from utils.image_handler import encode_image_for_claude
 from core.config import ENABLE_LLM_MAP_SUMMARIZATION, ANTHROPIC_MODEL, MAX_TOKENS, ENABLE_PDF_BETA
 from services.pdf_processing_service import get_pdf_service
 
 logger = get_logger(__name__)
 
 
-def _has_pdf_documents(file_docs=None, image_docs=None):
+def _has_pdf_documents(file_docs: list = None, image_docs: list = None) -> bool:
     """Check if any documents are PDFs to determine if beta headers are needed."""
     if file_docs:
         for doc in file_docs:
@@ -179,39 +178,40 @@ async def summarize_chunks(
                                 "compression_threshold": 4_500_000
                             }
                         )
-                        
-                        base64_content = base64.b64encode(image_content).decode('utf-8')
-                        
-                        # ✅ Check final base64 size before adding to collector
-                        if len(base64_content) > 5_242_880:  # 5MB API limit
-                            logger.error(
-                                "Skipping oversized image from base64 collector",
-                                extra={
-                                    "filename": image_doc.filename,
-                                    "base64_size": len(base64_content),
-                                    "limit": 5_242_880,
-                                    "size_mb": f"{len(base64_content) / 1024 / 1024:.2f}MB"
-                                }
-                            )
-                            # Skip adding this oversized image to base64_collector
-                            continue
-                        
-                        # Add to base64 collector
-                        base64_collector.append({
-                            "type": "image",
-                            "media_type": media_type,
-                            "filename": image_doc.filename,
-                            "content": base64_content
-                        })
-                        
-                        logger.debug(
-                            "Added image to base64 collector in raw mode",
+                    
+                    # ✅ Always encode and append, regardless of compression path
+                    base64_content = base64.b64encode(image_content).decode('utf-8')
+                    
+                    # ✅ Check final base64 size before adding to collector
+                    if len(base64_content) > 5_242_880:  # 5MB API limit
+                        logger.error(
+                            "Skipping oversized image from base64 collector",
                             extra={
                                 "filename": image_doc.filename,
-                                "media_type": media_type,
-                                "content_length": len(base64_content)
+                                "base64_size": len(base64_content),
+                                "limit": 5_242_880,
+                                "size_mb": f"{len(base64_content) / 1024 / 1024:.2f}MB"
                             }
                         )
+                        # Skip adding this oversized image to base64_collector
+                        continue
+                    
+                    # Add to base64 collector - ✅ FIXED: Moved outside if/else to run regardless of compression
+                    base64_collector.append({
+                        "type": "image",
+                        "media_type": media_type,
+                        "filename": image_doc.filename,
+                        "content": base64_content
+                    })
+                    
+                    logger.debug(
+                        "Added image to base64 collector in raw mode",
+                        extra={
+                            "filename": image_doc.filename,
+                            "media_type": media_type,
+                            "content_length": len(base64_content)
+                        }
+                    )
                 except Exception as e:
                     logger.error(
                         "Failed to add image to base64 collector in raw mode",
@@ -267,7 +267,7 @@ async def summarize_chunks(
                                 continue
                             
                             base64_collector.append({
-                                "type": "file",
+                                "type": "document",  # ✅ STANDARDIZED: Always use "document" for PDFs
                                 "media_type": media_type,
                                 "filename": file_doc.filename,
                                 "content": base64_content
@@ -305,7 +305,7 @@ async def summarize_chunks(
     return summaries
 
 
-def _build_text_chunk_message(chunk: str, idx: int, use_base64: bool, base64_collector):
+def _build_text_chunk_message(chunk: str, idx: int, use_base64: bool, base64_collector: list) -> list:
 
     chunk = chunk or ""
 
@@ -454,7 +454,7 @@ async def _summarize_file_documents(file_docs, llm, base64_collector, has_pdfs=F
                         base64_content = base64.b64encode(file_content).decode('utf-8')
                         
                         base64_collector.append({
-                            "type": "file",
+                            "type": "document",  # ✅ STANDARDIZED: Always use "document" for PDFs
                             "media_type": media_type,
                             "filename": doc.filename,
                             "content": base64_content

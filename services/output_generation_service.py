@@ -263,6 +263,14 @@ class OutputGenerationService:
     
     def _prepare_content_for_format(self, content: str, format_type: str) -> str:
         """Prepare content based on output format using strategy pattern."""
+        # Handle empty content gracefully
+        if not content.strip():
+            self.logger.warning(
+                "Empty content received, providing default message",
+                extra={"format_type": format_type}
+            )
+            content = "No content generated. The LLM processed the input but returned an empty response."
+        
         try:
             strategy = self.output_strategy_factory.get_strategy(format_type)
             prepared_content = strategy.prepare_content(content)
@@ -327,12 +335,21 @@ class OutputGenerationService:
         format_type: str,
         base64_chunks: Optional[List[Dict]]
     ) -> Dict[str, Optional[str]]:
-        """Generate additional output files (CSV, base64, etc.)."""
+        """Generate additional output files (CSV, base64, text, markdown, etc.)."""
         additional_files = {}
+        base_name, _ = os.path.splitext(filename)
         
-        # Generate CSV files for markdown content
-        if format_type == "markdown":
-            csv_file_path = self._generate_csv_files(output_folder, filename, content)
+        # Always generate raw text output with original content
+        text_file_path = self._generate_text_file(output_folder, base_name, content)
+        additional_files["text_file_path"] = text_file_path
+        
+        # Always generate markdown output for formatted content
+        markdown_file_path = self._generate_markdown_file(output_folder, base_name, content)
+        additional_files["markdown_file_path"] = markdown_file_path
+        
+        # Generate CSV files if CSV blocks are present (regardless of format type)
+        csv_file_path = self._generate_csv_files(output_folder, filename, content)
+        if csv_file_path:
             additional_files["csv_file_path"] = csv_file_path
         
         # Generate base64 chunk file
@@ -343,11 +360,12 @@ class OutputGenerationService:
         return additional_files
     
     def _generate_csv_files(self, output_folder: str, filename: str, content: str) -> Optional[str]:
-        """Generate CSV files from markdown content."""
+        """Generate CSV files from content (works for any format type)."""
         from services.output_service import _extract_csv_blocks
         
         csv_blocks = _extract_csv_blocks(content)
         if not csv_blocks:
+            self.logger.debug("No CSV blocks found in content")
             return None
         
         base_name, _ = os.path.splitext(filename)
@@ -382,6 +400,75 @@ class OutputGenerationService:
                 )
         
         return generated_csv_files[0] if generated_csv_files else None
+    
+    def _generate_text_file(self, output_folder: str, base_name: str, content: str) -> str:
+        """Generate raw text file with original content."""
+        text_filename = f"{base_name}_raw.txt"
+        text_file_path = os.path.join(output_folder, text_filename)
+        
+        try:
+            with open(text_file_path, "w", encoding="utf-8") as text_file:
+                text_file.write(content)
+            
+            self.logger.info(
+                "Generated raw text output",
+                extra={
+                    "text_path": text_file_path,
+                    "content_length": len(content)
+                }
+            )
+            
+            return text_file_path
+            
+        except OSError as e:
+            raise FileCreationException(
+                f"Failed to create text file: {str(e)}",
+                file_path=text_file_path,
+                file_operation="create_text_file"
+            ) from e
+    
+    def _generate_markdown_file(self, output_folder: str, base_name: str, content: str) -> str:
+        """Generate markdown file with formatted content."""
+        markdown_filename = f"{base_name}_content.md"
+        markdown_file_path = os.path.join(output_folder, markdown_filename)
+        
+        try:
+            # Prepare content for markdown format
+            markdown_content = self._prepare_markdown_content(content)
+            
+            # Extract CSV blocks to add references
+            from services.output_service import _extract_csv_blocks
+            csv_blocks = _extract_csv_blocks(content)
+            
+            # Add references to generated CSV files
+            if csv_blocks:
+                csv_references = "\n\n**Generated CSV Files:**\n"
+                for csv_block in csv_blocks:
+                    csv_filename = f"{base_name}_{csv_block['name']}.csv"
+                    csv_references += f"- {csv_block['original_section']}: `{csv_filename}`\n"
+                markdown_content += csv_references
+            
+            with open(markdown_file_path, "w", encoding="utf-8") as markdown_file:
+                markdown_file.write(markdown_content)
+            
+            self.logger.info(
+                "Generated markdown output",
+                extra={
+                    "markdown_path": markdown_file_path,
+                    "original_length": len(content),
+                    "markdown_length": len(markdown_content),
+                    "csv_references_added": len(csv_blocks) > 0
+                }
+            )
+            
+            return markdown_file_path
+            
+        except OSError as e:
+            raise FileCreationException(
+                f"Failed to create markdown file: {str(e)}",
+                file_path=markdown_file_path,
+                file_operation="create_markdown_file"
+            ) from e
     
     def _generate_base64_file(self, output_folder: str, base64_chunks: List[Dict]) -> str:
         """Generate base64 chunk JSON file."""
