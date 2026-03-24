@@ -80,6 +80,103 @@ def _sanitize_csv_content(content: str) -> str:
     return text
 
 
+def _is_valid_csv_content(content: str) -> bool:
+    """Validate if content looks like CSV data."""
+    if not content or not content.strip():
+        return False
+    
+    lines = content.strip().split('\n')
+    if len(lines) < 2:  # At least header + one data row
+        return False
+    
+    # Check for common CSV delimiters and patterns
+    first_line = lines[0].strip()
+    
+    # Patterns that indicate CSV data:
+    patterns = [
+        r'^".*",".*"',  # Quoted fields with commas
+        r'^.*?,.*?',     # Simple comma-separated
+        r'^".*";".*"',  # Quoted fields with semicolons
+        r'^.*?;.*?',     # Semicolon-separated
+        r'^".*"\t".*"',  # Quoted fields with tabs
+        r'^.*?\t.*?',     # Tab-separated
+        r'^.*?\|.*?',     # Pipe-separated
+    ]
+    
+    for pattern in patterns:
+        if re.match(pattern, first_line):
+            return True
+    
+    return False
+
+
+def _extract_csv_filename(content: str, csv_content: str, default_name: str = "csv_data") -> str:
+    """Extract filename from LLM output content."""
+    
+    # Pattern 1: Look for filename before CSV content
+    filename_patterns = [
+        # Before STEP headers
+        r"STEP\s+\d+\s*[-–—]\s*PRODUCE\s+THE\s+CSV\s*:\s*\n([^\n]*?\.csv)\s*\n",
+        # CSV headers with filenames
+        r"CSV\s*:\s*([^\n]*?\.csv)\s*\n",
+        r"CSV\s+DATA\s*:\s*([^\n]*?\.csv)\s*\n",
+        r"DATA\s*:\s*([^\n]*?\.csv)\s*\n",
+        r"TABLE\s*:\s*([^\n]*?\.csv)\s*\n",
+        # File references in text
+        r"file:\s*([^\n]*?\.csv)",
+        r"filename:\s*([^\n]*?\.csv)",
+        r"save\s+as\s+([^\n]*?\.csv)",
+        # In code blocks
+        r"```\s*([^\n]*?\.csv)\s*```",
+    ]
+    
+    for pattern in filename_patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            filename = match.group(1).strip()
+            if filename.endswith('.csv'):
+                # Clean filename for use in output filename
+                clean_name = filename.replace('.csv', '')
+                clean_name = re.sub(r"[^\w\s-]", "", clean_name)
+                clean_name = re.sub(r"\s+", "_", clean_name)
+                if clean_name:
+                    return clean_name
+    
+    # Pattern 2: Look for filename suggestions in the content around CSV
+    csv_start = content.find(csv_content)
+    if csv_start > 0:
+        # Look at lines before CSV content for filename hints
+        before_csv = content[:csv_start]
+        before_lines = before_csv.split('\n')[-5:]  # Last 5 lines before CSV
+        
+        for line in before_lines:
+            line = line.strip().lower()
+            if any(keyword in line for keyword in ['tax_slip', 'summary', 'report', 'data', 'output']):
+                # Extract potential filename
+                words = re.findall(r'\b(\w+)\b', line)
+                for word in words:
+                    if len(word) > 2 and word not in ['the', 'and', 'for', 'with', 'from']:
+                        return word
+    
+    # Pattern 3: Generate contextual filename based on content
+    if csv_content:
+        first_line = csv_content.split('\n')[0].strip()
+        
+        # Look for common tax-related headers
+        if any(header in first_line.lower() for header in ['taxpayer', 'slip', 'amount', 'box']):
+            return "tax_slip_summary"
+        elif any(header in first_line.lower() for header in ['name', 'age', 'city']):
+            return "person_data"
+        elif any(header in first_line.lower() for header in ['date', 'description', 'amount']):
+            return "financial_data"
+        elif 'invoice' in first_line.lower():
+            return "invoice_data"
+        elif 'report' in first_line.lower():
+            return "report_data"
+    
+    return default_name
+
+
 def _extract_csv_blocks(content: str) -> list:
     """Extract multiple CSV blocks with their section names."""
     csv_blocks = []
@@ -217,6 +314,132 @@ def _extract_csv_blocks(content: str) -> list:
                 "original_section": f"CSV Output {i+1}"
             })
     
+    # If still no CSV blocks found, look for CSV data after "STEP 5 – PRODUCE THE CSV:" or similar
+    if not csv_blocks:
+        # Pattern to find CSV data after step headers like "STEP 5 – PRODUCE THE CSV:"
+        step_pattern = r"STEP\s+\d+\s*[-–—]\s*PRODUCE\s+THE\s+CSV\s*:\s*\n(.*?)(?=\n\n[A-Z]|\nSTEP|\Z)"
+        matches = re.finditer(step_pattern, content, re.DOTALL | re.IGNORECASE)
+        
+        for i, match in enumerate(matches):
+            csv_content = match.group(1).strip()
+            # Validate that this looks like CSV data using comprehensive validation
+            if _is_valid_csv_content(csv_content):
+                # Extract filename from content
+                filename = _extract_csv_filename(content, csv_content, "tax_slip_summary")
+                csv_blocks.append({
+                    "name": filename,
+                    "content": csv_content,
+                    "original_section": "Tax Slip Summary CSV"
+                })
+    
+    # Additional comprehensive CSV detection patterns
+    if not csv_blocks:
+        # Pattern 1: Look for CSV data after "CSV:" or "CSV DATA:" headers
+        csv_header_patterns = [
+            r"CSV\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+            r"CSV\s+DATA\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+            r"DATA\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+            r"TABLE\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+        ]
+        
+        for pattern in csv_header_patterns:
+            matches = re.finditer(pattern, content, re.DOTALL | re.IGNORECASE)
+            for i, match in enumerate(matches):
+                csv_content = match.group(1).strip()
+                if _is_valid_csv_content(csv_content):
+                    # Extract filename from content
+                    filename = _extract_csv_filename(content, csv_content, "csv_data_" + str(i+1))
+                    csv_blocks.append({
+                        "name": filename,
+                        "content": csv_content,
+                        "original_section": "CSV Data " + str(i+1)
+                    })
+                    break
+            if csv_blocks:
+                break
+    
+    # Pattern 2: Look for CSV-like data in table format
+    if not csv_blocks:
+        # Find sections that look like tables with consistent column structure
+        content_lines = content.split('\n')
+        for i in range(len(content_lines) - 2):  # Need at least 3 lines for a table
+            current_line = content_lines[i].strip()
+            next_line = content_lines[i + 1].strip()
+            
+            # Check if we have a table-like structure
+            if (_is_valid_csv_content(current_line) and 
+                _is_valid_csv_content(next_line) and
+                # Check for consistent delimiter usage
+                (current_line.count(',') == next_line.count(',') or
+                 current_line.count(';') == next_line.count(';') or
+                 current_line.count('\t') == next_line.count('\t') or
+                 current_line.count('|') == next_line.count('|'))):
+                
+                # Extract entire table
+                table_content = current_line + '\n' + next_line
+                j = i + 2
+                while j < len(content_lines) and _is_valid_csv_content(content_lines[j].strip()):
+                    table_content += '\n' + content_lines[j].strip()
+                    j += 1
+                
+                # Extract filename from content
+                filename = _extract_csv_filename(content, table_content, "table_data_" + str(len(csv_blocks) + 1))
+                csv_blocks.append({
+                    "name": filename,
+                    "content": table_content,
+                    "original_section": "Table Data " + str(len(csv_blocks) + 1)
+                })
+                break
+    
+    # Pattern 3: Look for CSV data between specific markers
+    if not csv_blocks:
+        marker_patterns = [
+            r"---\s*BEGIN\s*CSV\s*---\s*\n(.*?)\n---\s*END\s*CSV\s*---",
+            r"<<<\s*CSV\s*START\s*>>>\s*\n(.*?)\n<<<\s*CSV\s*END\s*>>>",
+            r"\[CSV\s*START\]\s*\n(.*?)\n\[CSV\s*END\]",
+            r"<csv>\s*\n(.*?)\n</csv>",
+        ]
+        
+        for pattern in marker_patterns:
+            matches = re.finditer(pattern, content, re.DOTALL | re.IGNORECASE)
+            for i, match in enumerate(matches):
+                csv_content = match.group(1).strip()
+                if _is_valid_csv_content(csv_content):
+                    # Extract filename from content
+                    filename = _extract_csv_filename(content, csv_content, "marked_csv_" + str(i+1))
+                    csv_blocks.append({
+                        "name": filename,
+                        "content": csv_content,
+                        "original_section": "Marked CSV " + str(i+1)
+                    })
+                    break
+            if csv_blocks:
+                break
+    
+    # Pattern 4: Last resort - look for any CSV-like content in entire document
+    if not csv_blocks:
+        # Split into sections and look for CSV-like content
+        sections = re.split(r'\n\s*\n|\n#{1,6}\s+', content)
+        for i, section in enumerate(sections):
+            section = section.strip()
+            if len(section) > 50 and _is_valid_csv_content(section):  # Reasonable length
+                lines = section.split('\n')
+                # Check if most lines look like CSV data
+                csv_lines = 0
+                for line in lines[:10]:  # Check first 10 lines
+                    if _is_valid_csv_content(line):
+                        csv_lines += 1
+                
+                if csv_lines >= len(lines[:10]) * 0.7:  # 70% of lines should be CSV-like
+                    # Extract filename from content
+                    filename = _extract_csv_filename(content, section, "detected_csv_" + str(len(csv_blocks) + 1))
+                    csv_blocks.append({
+                        "name": filename,
+                        "content": section,
+                        "original_section": "Detected CSV " + str(len(csv_blocks) + 1)
+                    })
+                    break
+    
     return csv_blocks
 
 
@@ -245,6 +468,57 @@ def _remove_all_csv_blocks(content: str) -> str:
     cleaned = re.sub(r"SECTION\s+\d+\s*[—-][^\n]*.*?```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
     # Remove simple CSV blocks
     cleaned = re.sub(r"```csv\s*\n.*?\n```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    # Remove STEP X – PRODUCE THE CSV: patterns (new pattern)
+    cleaned = re.sub(r"STEP\s+\d+\s*[-–—]\s*PRODUCE\s+THE\s+CSV\s*:.*?(?=\n\n[A-Z]|\nSTEP|\Z)", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove additional comprehensive CSV patterns
+    # Pattern 1: CSV header patterns
+    csv_header_patterns = [
+        r"CSV\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+        r"CSV\s+DATA\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+        r"DATA\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+        r"TABLE\s*:\s*\n(.*?)(?=\n\n[A-Z]|\n#|\nSTEP|\Z)",
+    ]
+    
+    for pattern in csv_header_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Pattern 2: CSV marker patterns
+    marker_patterns = [
+        r"---\s*BEGIN\s*CSV\s*---\s*\n.*?\n---\s*END\s*CSV\s*---",
+        r"<<<\s*CSV\s*START\s*>>>\s*\n.*?\n<<<\s*CSV\s*END\s*>>>",
+        r"\[CSV\s*START\]\s*\n.*?\n\[CSV\s*END\]",
+        r"<csv>\s*\n.*?\n</csv>",
+    ]
+    
+    for pattern in marker_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Pattern 3: Remove detected table-like CSV sections (more aggressive)
+    lines = cleaned.split('\n')
+    i = 0
+    while i < len(lines) - 2:
+        current_line = lines[i].strip()
+        next_line = lines[i + 1].strip()
+        
+        # If this looks like the start of CSV data, remove the entire section
+        if (_is_valid_csv_content(current_line) and 
+            _is_valid_csv_content(next_line) and
+            len(current_line) > 20):  # Reasonable line length
+            
+            # Find end of CSV section
+            j = i + 2
+            while j < len(lines) and _is_valid_csv_content(lines[j].strip()):
+                j += 1
+            
+            # Remove the CSV section
+            lines = lines[:i] + lines[j:]
+            # Don't increment i to check next line after removal
+        else:
+            i += 1
+    
+    cleaned = '\n'.join(lines)
+    
     return cleaned.strip()
 
 
