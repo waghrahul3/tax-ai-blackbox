@@ -37,9 +37,26 @@ class DocumentPipeline:
 
         llm = get_llm(temperature=temperature)
 
-        text_docs = [d for d in documents if d.is_text()]
-        image_docs = [d for d in documents if d.is_image()]
-        file_docs = [d for d in documents if getattr(d, "source_path", None)]
+        # When ENABLE_BASE64_INPUT is true, PDFs with source_path should be treated as file_docs
+        # to ensure they're included in base64_collector for manifest generation
+        if ENABLE_BASE64_INPUT:
+            image_docs = [d for d in documents if d.is_image()]
+            file_docs = [
+                d for d in documents
+                if getattr(d, "source_path", None)
+                and not d.is_image()
+                and (d.source_media_type == "application/pdf" or not d.is_text())
+            ]
+            text_docs = [d for d in documents if d.is_text() and d not in file_docs]
+        else:
+            text_docs = [d for d in documents if d.is_text()]
+            image_docs = [d for d in documents if d.is_image()]
+            file_docs = [
+                d for d in documents
+                if getattr(d, "source_path", None)
+                and not d.is_text()
+                and not d.is_image()
+            ]
 
         if ENABLE_PANDAS_CLEANING and text_docs:
             self._normalize_text_documents(text_docs)
