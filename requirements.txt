@@ -10,3 +10,4 @@ python-multipart
 structlog
 Pillow
 langchain-community
+gunicorn
